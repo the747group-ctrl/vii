@@ -7,6 +7,7 @@ mod hotkey;
 mod inject;
 mod overlay_ipc;
 mod response_watcher;
+mod streaming_agent;
 mod transcribe;
 mod tts;
 

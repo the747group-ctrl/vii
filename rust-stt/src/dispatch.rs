@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use crate::agent_api;
 use crate::overlay_ipc::{OverlayEvent, OverlaySender};
+use crate::streaming_agent;
 use crate::tts;
 
 const AGENTS: &[&str] = &["bob", "falcon", "ace", "pixi", "buzz", "teri", "terry", "claude"];
@@ -109,7 +110,9 @@ pub fn dispatch_to_agent(
     // 3. macOS notification
     notify(agent, command);
 
-    // 4. Direct API call (Phase 7) — if API key available
+    // 4. VII Two: Streaming API call — overlapped TTS
+    //    Sentences stream in real-time, TTS generates per-sentence,
+    //    playback starts on first sentence. ~1.8s vs ~5-8s.
     if let Some(key) = api_key {
         let agent_owned = agent.to_string();
         let command_owned = command.to_string();
@@ -120,23 +123,26 @@ pub fn dispatch_to_agent(
 
         thread::spawn(move || {
             eprintln!(
-                "[api] Calling Anthropic API for {}...",
+                "[stream] VII Two: Streaming {} response with overlapped TTS...",
                 agent_owned
             );
 
-            match agent_api::call_agent(&agent_owned, &command_owned, &key_owned) {
-                Ok(response) => {
-                    eprintln!(
-                        "[api] {} responded: \"{}\"",
-                        capitalize(&agent_owned),
-                        truncate(&response, 80)
-                    );
+            streaming_agent::stream_and_speak(
+                &agent_owned,
+                &command_owned,
+                &key_owned,
+                &overlay_clone,
+                &tts_clone,
+            );
 
-                    // Send to overlay immediately
-                    overlay_clone.send(OverlayEvent::AgentResponse {
-                        agent: agent_owned.clone(),
-                        text: response.clone(),
-                    });
+            // Legacy: also save response for audit trail
+            // (full response is sent to overlay by stream_and_speak)
+            eprintln!("[stream] {} response complete", capitalize(&agent_owned));
+
+            // NOTE: The block below is kept for compatibility but stream_and_speak
+            // already handles overlay + TTS. The old synchronous path is commented out.
+            // Old code: agent_api::call_agent() → overlay → tts.speak()
+            {
 
                     // Speak the response aloud (Phase 6 TTS)
                     tts_clone.speak(&agent_owned, &response, &overlay_clone);

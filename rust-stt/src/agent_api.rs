@@ -59,7 +59,7 @@ pub fn call_agent(agent: &str, command: &str, api_key: &str) -> Result<String, S
 ///   - Bob: workspace root SOUL.md + MEMORY.md (he IS the main agent)
 ///   - Falcon, Ace: workspace/agents/{name}/
 ///   - Pixi, Buzz: ~/Desktop/The 747 Lab - The Studio/{Name}/
-fn build_system_prompt(agent: &str) -> String {
+pub fn build_system_prompt(agent: &str) -> String {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     let home_path = PathBuf::from(&home);
     let workspace = home_path.join(".openclaw").join("workspace");
