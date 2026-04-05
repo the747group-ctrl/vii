@@ -135,43 +135,10 @@ pub fn dispatch_to_agent(
                 &tts_clone,
             );
 
-            // Legacy: also save response for audit trail
-            // (full response is sent to overlay by stream_and_speak)
             eprintln!("[stream] {} response complete", capitalize(&agent_owned));
 
-            // NOTE: The block below is kept for compatibility but stream_and_speak
-            // already handles overlay + TTS. The old synchronous path is commented out.
-            // Old code: agent_api::call_agent() → overlay → tts.speak()
-            {
-
-                    // Speak the response aloud (Phase 6 TTS)
-                    tts_clone.speak(&agent_owned, &response, &overlay_clone);
-
-                    // Also write response to voice-responses dir (for logging)
-                    write_response_file(
-                        &agent_owned,
-                        &response,
-                        &dispatch_id_owned,
-                    );
-
-                    // macOS notification with response preview
-                    notify_response(&agent_owned, &response);
-                }
-                Err(e) => {
-                    eprintln!("[api] Error from {}: {}", agent_owned, e);
-
-                    // Notify user of failure
-                    overlay_clone.send(OverlayEvent::AgentResponse {
-                        agent: agent_owned.clone(),
-                        text: format!("Sorry, I couldn't process that right now. ({})", truncate(&e, 60)),
-                    });
-
-                    // Fall back to OpenClaw cron if direct API fails
-                    eprintln!("[api] Falling back to OpenClaw cron...");
-                    create_response_marker(&dispatch_id_owned, &agent_owned);
-                    trigger_cron();
-                }
-            }
+            // Write audit trail
+            write_response_file(&agent_owned, "(streamed)", &dispatch_id_owned);
         });
     } else {
         // No API key — fall back to OpenClaw cron (Phase 5 behavior)
