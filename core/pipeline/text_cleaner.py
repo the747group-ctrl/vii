@@ -26,13 +26,35 @@ _MARKDOWN_LIST = re.compile(r'^\s*[-*]\s+', re.MULTILINE)
 _MARKDOWN_LINK = re.compile(r'\[(.+?)\]\(.+?\)')
 
 # Sentence-ending punctuation (handles decimals & versions)
-# "Dr. Smith" won't split. "v2.1.3" won't split. "Hello. World" will.
-_SENTENCE_END = re.compile(
-    r'(?<!\b(?:Dr|Mr|Mrs|Ms|Prof|Sr|Jr|vs|etc|approx|dept|est|govt|inc))'
-    r'(?<!\d)'
-    r'[.!?]'
-    r'(?=\s+[A-Z"\']|\s*$)'
-)
+# Uses a simpler approach compatible with Python 3.14's strict lookbehind rules
+_ABBREVIATIONS = {'Dr', 'Mr', 'Mrs', 'Ms', 'Prof', 'Sr', 'Jr', 'vs', 'etc', 'approx', 'dept', 'est', 'govt', 'inc'}
+
+def _is_sentence_end(text: str, pos: int) -> bool:
+    """Check if a period/!/?  at position pos is a real sentence end."""
+    if pos >= len(text):
+        return False
+    char = text[pos]
+    if char not in '.!?':
+        return False
+    # Check what follows: must be whitespace + uppercase, or end of string
+    rest = text[pos+1:]
+    if not rest or rest == ' ':
+        return True
+    if rest[0] in ' \t\n':
+        remaining = rest.lstrip()
+        if not remaining:
+            return True
+        if remaining[0].isupper() or remaining[0] in '"\'':
+            # Check what's before — is it an abbreviation?
+            before = text[:pos].rstrip()
+            last_word = before.split()[-1] if before.split() else ''
+            if last_word in _ABBREVIATIONS:
+                return False
+            # Check if preceded by a digit (decimal number)
+            if before and before[-1].isdigit():
+                return False
+            return True
+    return False
 
 # Max chars per TTS chunk (Kokoro has issues above ~390)
 MAX_TTS_CHARS = 380
@@ -69,23 +91,19 @@ def extract_complete_sentences(text: str) -> tuple[list[str], str]:
     - Long sentences (split at commas if > MAX_TTS_CHARS)
     """
     sentences = []
-    remaining = text
+    last_split = 0
 
-    for match in _SENTENCE_END.finditer(text):
-        end_pos = match.end()
-        sentence = text[:end_pos].strip()
+    for i, char in enumerate(text):
+        if char in '.!?' and _is_sentence_end(text, i):
+            sentence = text[last_split:i+1].strip()
+            if sentence:
+                if len(sentence) > MAX_TTS_CHARS:
+                    sentences.extend(_split_long_sentence(sentence))
+                else:
+                    sentences.append(sentence)
+            last_split = i + 1
 
-        if sentence:
-            # Split long sentences at commas/semicolons
-            if len(sentence) > MAX_TTS_CHARS:
-                sub_sentences = _split_long_sentence(sentence)
-                sentences.extend(sub_sentences)
-            else:
-                sentences.append(sentence)
-
-        text = text[end_pos:].strip()
-
-    remaining = text
+    remaining = text[last_split:].strip() if last_split < len(text) else ""
     return sentences, remaining
 
 
