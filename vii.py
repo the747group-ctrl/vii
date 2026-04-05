@@ -360,11 +360,101 @@ def main():
         text_mode(api_key, agent)
         return
 
-    # Use text mode for now — keyboard hold detection needs pynput or similar
-    # TODO: Add pynput for SPACE hold-to-talk
-    print("  [Voice mode requires pynput — using text input for now]")
-    print("  Type your message, or 'bob, ...' to dispatch.\n")
-    text_mode(api_key, agent)
+    # Try voice mode with pynput
+    try:
+        from pynput import keyboard
+        print("  [VOICE MODE ACTIVE — Hold SPACE to speak]\n")
+        voice_mode(api_key, agent)
+    except ImportError:
+        print("  [pynput not found — text input mode]\n")
+        text_mode(api_key, agent)
+
+
+def voice_mode(api_key: str, agent: str):
+    """Hold SPACE to record, release to process. Full voice pipeline."""
+    from pynput import keyboard
+    import sounddevice as sd
+
+    recording = False
+    stop_event = threading.Event()
+    audio_chunks = []
+    current_agent = [agent]  # mutable ref
+
+    def audio_callback(indata, frames, time_info, status):
+        if recording:
+            audio_chunks.append(indata.copy())
+
+    stream = sd.InputStream(
+        samplerate=SAMPLE_RATE, channels=CHANNELS,
+        dtype='float32', blocksize=1024, callback=audio_callback,
+    )
+    stream.start()
+
+    def on_press(key):
+        nonlocal recording, audio_chunks
+        if key == keyboard.Key.space and not recording:
+            recording = True
+            audio_chunks.clear()
+            print("  [recording...] ", end="", flush=True)
+
+    def on_release(key):
+        nonlocal recording
+        if key == keyboard.Key.space and recording:
+            recording = False
+            print("processing...", flush=True)
+
+            if not audio_chunks:
+                print("  [no audio captured]\n")
+                return
+
+            audio = np.concatenate(audio_chunks, axis=0).flatten()
+
+            # Check for silence
+            rms = float(np.sqrt(np.mean(audio ** 2)))
+            if rms < 0.005:
+                print("  [silence detected]\n")
+                return
+
+            # Transcribe
+            t_stt = time.time()
+            text = transcribe(audio)
+            stt_ms = (time.time() - t_stt) * 1000
+
+            if not text or len(text.strip()) < 2:
+                print("  [no speech detected]\n")
+                return
+
+            # Filter whisper hallucinations
+            lower = text.lower().strip()
+            hallucinations = ["thank you", "thanks", "bye", "you", "the end",
+                              "subscribete", "subscribe", "thank you for watching"]
+            if any(lower == h or lower.startswith(h) for h in hallucinations):
+                print(f"  [filtered: \"{text}\"]\n")
+                return
+
+            print(f"  You: \"{text}\" [{stt_ms:.0f}ms]")
+
+            # Detect agent dispatch
+            detected, cleaned = detect_agent(text)
+            if detected:
+                current_agent[0] = detected
+                text = cleaned if cleaned else text
+                print(f"  [switched to {current_agent[0].upper()}]")
+
+            # Stream and speak
+            asyncio.run(stream_and_speak(api_key, current_agent[0], text))
+
+        if key == keyboard.Key.esc:
+            stream.stop()
+            stream.close()
+            return False  # Stop listener
+
+    print("  Ready. Hold SPACE to speak. ESC to quit.\n")
+
+    with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
+        listener.join()
+
+    print("\n  VII stopped. Just speak.\n")
 
 
 def text_mode(api_key: str, agent: str):
