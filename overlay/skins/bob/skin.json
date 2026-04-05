@@ -1,0 +1,50 @@
+{
+  "type": "avatar",
+  "name": "Bob",
+  "description": "Lead strategist. Deep, authoritative.",
+  "voice": "am_onyx",
+  "speed": 1.0,
+  "rendering": {
+    "shape": "square",
+    "border": false,
+    "shadow": true,
+    "image_scale": 1.0
+  },
+  "events": {
+    "idle": {
+      "animation": "idle.webm",
+      "glow": false,
+      "playback": "loop"
+    },
+    "listening": {
+      "animation": "listening.webm",
+      "glow": true,
+      "glow_color": [0, 120, 255],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "playback": "loop"
+    },
+    "thinking": {
+      "animation": "thinking.webm",
+      "glow": true,
+      "glow_color": [0, 170, 255],
+      "glow_speed": 600,
+      "glow_style": "pulse",
+      "playback": "loop"
+    },
+    "speaking": {
+      "animation": "speaking.webm",
+      "glow": true,
+      "glow_color": [0, 200, 255],
+      "glow_speed": 400,
+      "glow_style": "pulse",
+      "show_chat_bubble": true,
+      "playback": "loop"
+    }
+  },
+  "transitions": {
+    "idle-thinking": "idle-thinking.webm",
+    "thinking-speaking": "thinking-speaking.webm",
+    "speaking-idle": "speaking-idle.webm"
+  }
+}

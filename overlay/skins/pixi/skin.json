@@ -1,0 +1,46 @@
+{
+  "type": "avatar",
+  "name": "Pixi",
+  "description": "Creative director. Expressive, enthusiastic.",
+  "voice": "af_heart",
+  "speed": 1.25,
+  "rendering": {
+    "shape": "square",
+    "border": false,
+    "shadow": true,
+    "image_scale": 1.0
+  },
+  "events": {
+    "idle": {
+      "animation": "idle.webm",
+      "glow": false,
+      "playback": "pingpong"
+    },
+    "listening": {
+      "animation": "listening.webm",
+      "glow": true,
+      "glow_color": [255, 100, 200],
+      "glow_speed": 800,
+      "glow_style": "breathing",
+      "playback": "loop"
+    },
+    "thinking": {
+      "animation": "thinking.webm",
+      "glow": true,
+      "glow_color": [255, 150, 220],
+      "glow_speed": 500,
+      "glow_style": "pulse",
+      "playback": "loop"
+    },
+    "speaking": {
+      "animation": "speaking.webm",
+      "glow": true,
+      "glow_color": [255, 100, 255],
+      "glow_speed": 350,
+      "glow_style": "pulse",
+      "show_chat_bubble": true,
+      "playback": "loop"
+    }
+  },
+  "transitions": {}
+}

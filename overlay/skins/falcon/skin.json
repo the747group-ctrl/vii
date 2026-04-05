@@ -1,0 +1,46 @@
+{
+  "type": "avatar",
+  "name": "Falcon",
+  "description": "Intelligence analyst. Measured, professional.",
+  "voice": "am_michael",
+  "speed": 0.95,
+  "rendering": {
+    "shape": "square",
+    "border": false,
+    "shadow": true,
+    "image_scale": 1.0
+  },
+  "events": {
+    "idle": {
+      "animation": "idle.webm",
+      "glow": false,
+      "playback": "loop"
+    },
+    "listening": {
+      "animation": "listening.webm",
+      "glow": true,
+      "glow_color": [0, 255, 150],
+      "glow_speed": 1200,
+      "glow_style": "breathing",
+      "playback": "loop"
+    },
+    "thinking": {
+      "animation": "thinking.webm",
+      "glow": true,
+      "glow_color": [0, 255, 100],
+      "glow_speed": 800,
+      "glow_style": "fade",
+      "playback": "loop"
+    },
+    "speaking": {
+      "animation": "speaking.webm",
+      "glow": true,
+      "glow_color": [50, 255, 120],
+      "glow_speed": 500,
+      "glow_style": "pulse",
+      "show_chat_bubble": true,
+      "playback": "loop"
+    }
+  },
+  "transitions": {}
+}
