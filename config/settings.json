@@ -1,0 +1,12 @@
+{
+  "hotkey": "ctrl",
+  "model_size": "small",
+  "language": "en",
+  "device": "cpu",
+  "compute_type": "int8",
+  "beam_size": 1,
+  "vad_filter": true,
+  "injection_method": "clipboard",
+  "sound_feedback": true,
+  "show_notifications": true
+}

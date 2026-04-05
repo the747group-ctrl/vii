@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>747 Lab — Agent Avatars</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0c;
+    color: #e0e0e0;
+    font-family: 'SF Mono', 'JetBrains Mono', monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 40px 20px;
+    min-height: 100vh;
+  }
+  h1 {
+    font-size: 14px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    color: #888;
+    margin-bottom: 8px;
+  }
+  .subtitle {
+    font-size: 11px;
+    color: #555;
+    margin-bottom: 40px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 32px;
+    max-width: 800px;
+  }
+  .avatar-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  .avatar-frame {
+    position: relative;
+    width: 144px;
+    height: 144px;
+    border: 2px solid #222;
+    border-radius: 8px;
+    background: #111;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .avatar-frame img {
+    width: 144px;
+    height: 144px;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+  .avatar-frame.active {
+    border-color: #4a9;
+    box-shadow: 0 0 20px rgba(68, 170, 136, 0.2);
+  }
+  .name {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  .role {
+    font-size: 10px;
+    color: #666;
+    margin-top: -8px;
+  }
+  .color-bob { color: #4466aa; }
+  .color-falcon { color: #cc8833; }
+  .color-ace { color: #55aa55; }
+  .color-pixi { color: #cc44aa; }
+  .color-buzz { color: #cc8822; }
+  .color-claude { color: #8855bb; }
+  .color-founder { color: #d4af37; }
+  .sizes {
+    display: flex;
+    gap: 24px;
+    margin-top: 40px;
+    padding-top: 40px;
+    border-top: 1px solid #1a1a1a;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .size-demo {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .size-demo img {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    border: 1px solid #222;
+    border-radius: 4px;
+    background: #111;
+  }
+  .size-label {
+    font-size: 10px;
+    color: #555;
+  }
+  .footer {
+    margin-top: 40px;
+    font-size: 10px;
+    color: #333;
+    letter-spacing: 2px;
+  }
+</style>
+</head>
+<body>
+  <h1>Agent Avatars</h1>
+  <p class="subtitle">48×48 Procedural Pixel Art — Whisper Overlay System</p>
+
+  <div class="grid">
+    <div class="avatar-card">
+      <div class="avatar-frame active">
+        <img src="avatars/founder.png" alt="Founder">
+      </div>
+      <span class="name color-founder">Founder</span>
+      <span class="role">Chairman</span>
+    </div>
+    <div class="avatar-card">
+      <div class="avatar-frame">
+        <img src="avatars/bob.png" alt="Bob">
+      </div>
+      <span class="name color-bob">Bob</span>
+      <span class="role">CSO</span>
+    </div>
+    <div class="avatar-card">
+      <div class="avatar-frame">
+        <img src="avatars/falcon.png" alt="Falcon">
+      </div>
+      <span class="name color-falcon">Falcon</span>
+      <span class="role">Intel</span>
+    </div>
+    <div class="avatar-card">
+      <div class="avatar-frame">
+        <img src="avatars/ace.png" alt="Ace">
+      </div>
+      <span class="name color-ace">Ace</span>
+      <span class="role">COO</span>
+    </div>
+    <div class="avatar-card">
+      <div class="avatar-frame">
+        <img src="avatars/pixi.png" alt="Pixi">
+      </div>
+      <span class="name color-pixi">Pixi</span>
+      <span class="role">Creative</span>
+    </div>
+    <div class="avatar-card">
+      <div class="avatar-frame">
+        <img src="avatars/buzz.png" alt="Buzz">
+      </div>
+      <span class="name color-buzz">Buzz</span>
+      <span class="role">Brand</span>
+    </div>
+    <div class="avatar-card">
+      <div class="avatar-frame">
+        <img src="avatars/claude.png" alt="Claude">
+      </div>
+      <span class="name color-claude">Claude</span>
+      <span class="role">AI</span>
+    </div>
+  </div>
+
+  <div class="sizes">
+    <div class="size-demo">
+      <img src="avatars/founder.png" width="48" height="48">
+      <span class="size-label">48px (native)</span>
+    </div>
+    <div class="size-demo">
+      <img src="avatars/founder.png" width="96" height="96">
+      <span class="size-label">96px (overlay)</span>
+    </div>
+    <div class="size-demo">
+      <img src="avatars/founder.png" width="192" height="192">
+      <span class="size-label">192px (4×)</span>
+    </div>
+  </div>
+
+  <p class="footer">Developed by The 747 Lab</p>
+</body>
+</html>

@@ -1,0 +1,8 @@
+models/
+*.pyc
+__pycache__/
+.build/
+*.o
+target/
+whisper-dictation-zero*
+tts-venv/

@@ -1,0 +1,23 @@
+[package]
+name = "whisper-dictation"
+version = "1.0.0"
+edition = "2021"
+description = "Local Whisper Voice Dictation — Developed by The 747 Lab"
+
+[dependencies]
+whisper-rs = "0.12"
+cpal = "0.15"
+rdev = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+clap = { version = "4", features = ["derive"] }
+chrono = "0.4"
+ctrlc = "3.4"
+ureq = { version = "2", features = ["json"] }
+rodio = "0.20"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
