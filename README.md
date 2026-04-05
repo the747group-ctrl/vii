@@ -2,7 +2,7 @@
 
 **The upgrade. The market-ready build. The Apple pitch.**
 
-VII Two takes everything from VII Zero (Phases 1-7) and integrates the best patterns from [DecisionsAI](https://github.com/tensology/decisionsai) (open source voice desktop assistant) and architecture insights from the Claude Code source leak.
+VII Two builds on the foundation of VII Zero (Phases 1-7) with a reimagined streaming architecture. Inspired by the best open source voice AI work — including DecisionsAI, Keith Schacht's Task Master, and emerging patterns from the wider voice AI community — VII Two is an original creation designed to be the voice interface people actually love using.
 
 ## Vision
 
@@ -95,10 +95,11 @@ VII Zero is preserved at `~/.openclaw/workspace/projects/local-whisper/` (git ta
 - **Remote:** FastAPI + python-telegram-bot
 - **Echo:** NLMS adaptive filter (numpy vectorized)
 
-## Reference Codebases
+## Inspiration & Open Source References
 
-- **DecisionsAI:** `~/.openclaw/workspace/projects/decisionsai/` (cloned)
-- **VII Zero:** `~/.openclaw/workspace/projects/local-whisper/` (frozen)
+- **DecisionsAI** — Open source voice desktop assistant (Pipecat pipeline, Telegram integration)
+- **Keith Schacht's Task Master** — Voice-first UX patterns (LiveKit, real-time updates)
+- **VII Zero** — Our own foundation (`~/.openclaw/workspace/projects/local-whisper/`)
 
 ---
 

@@ -5,7 +5,7 @@
 VII Two must feel like an Apple product demo. Every interaction has visual feedback.
 No loading spinners. No modal dialogs. No dead moments. The UI is alive.
 
-## What Makes DecisionsAI Feel "Snappy" (Patterns We Steal)
+## What Makes Great Voice UI Feel "Snappy" (Design Principles)
 
 ### 1. Immediate Visual Feedback on Every State Change
 - User speaks → glow starts INSTANTLY (not after transcription completes)
@@ -98,7 +98,7 @@ cannot override it. User actions always take priority.
 
 ## Web UI Design (Settings & Remote)
 
-### Color Palette (from DecisionsAI, adapted for 747 brand)
+### Color Palette (747 Brand)
 ```
 Background:     #0d1117 (GitHub dark)
 Surface:        #161b22

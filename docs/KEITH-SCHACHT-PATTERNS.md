@@ -1,4 +1,4 @@
-# Keith Schacht Patterns — What VII Two Steals
+# Keith Schacht Patterns — Inspiration for VII Two
 
 ## Source: Keith Schacht (@keith__schacht)
 - Ex-Facebook PM, sold Mystery Science for $140M
@@ -64,22 +64,22 @@ Browser (mic) → WebRTC → LiveKit Cloud → Agent (Python)
 3. **Tool-callable screenshots** — model can request fresh screenshots for more context
 4. **Points to where to click** — spatial understanding of screen content
 
-### What VII Two Takes From This
+### How This Inspires VII Two
 - The screen-awareness pattern is PERFECT for VII's agent actions
 - "Bob, what's on my screen?" → screenshot → Claude vision → spoken response
 - "Pixi, help me with this design" → screenshot → creative feedback
 - Integrates naturally with our Telegram remote control (send screenshot + voice context)
 
-## Integration Plan for VII Two
+## How VII Two Builds On These Ideas
 
-### From Task Master:
+### Inspired by Task Master:
 1. **Breathing circle mic button** → Port to VII overlay (replace static avatar trigger)
 2. **LiveKit WebRTC** → Evaluate replacing our Unix socket IPC for lower-latency voice streaming
 3. **Real-time UI updates** → Tasks/actions update WHILE the agent speaks
 4. **Undo pattern** → Every agent action is reversible by voice
 5. **Wake word with privacy** → Local detection, no server call until activated
 
-### From Clippy:
+### Inspired by Clippy:
 1. **Screen awareness** → Agent can see your screen when asked
 2. **Spatial pointing** → "Click here" with visual indicator
 3. **Context-rich responses** → Agent understands what you're looking at
