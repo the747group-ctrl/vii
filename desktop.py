@@ -157,47 +157,83 @@ class AIWorker(QThread):
         self.transcript_ready.emit(text)
         self.status_changed.emit("Thinking...")
 
-        # ── LLM (streaming for speed) ──
+        # ── LLM ──
         import httpx
 
         self._conversation.append({"role": "user", "content": text})
         messages = self._conversation[-20:]
 
+        # Load settings for provider selection
+        settings_path = os.path.join(PROJECT_ROOT, "config", "vii-settings.json")
+        llm_provider = "anthropic"
+        llm_model = CLAUDE_MODEL
+        ollama_url = "http://127.0.0.1:11434"
+        if os.path.exists(settings_path):
+            with open(settings_path) as f:
+                s = json.load(f)
+                llm_provider = s.get("llm_provider", "anthropic")
+                llm_model = s.get("llm_model", CLAUDE_MODEL)
+                ollama_url = s.get("ollama_url", "http://127.0.0.1:11434")
+
         t0 = time.time()
         response_text = ""
 
-        # Stream response — first tokens arrive faster
-        with httpx.Client(timeout=30.0) as client:
-            with client.stream(
-                "POST", "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": API_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": CLAUDE_MODEL,
-                    "max_tokens": 300,
-                    "system": SYSTEM_PROMPT,
-                    "messages": messages,
-                    "stream": True,
-                },
-            ) as resp:
+        if llm_provider == "ollama":
+            # Local Ollama — no API key needed
+            with httpx.Client(timeout=60.0) as client:
+                resp = client.post(
+                    f"{ollama_url}/api/chat",
+                    json={
+                        "model": llm_model or "llama3.2:1b",
+                        "messages": [{"role": "system", "content": SYSTEM_PROMPT}] + messages,
+                        "stream": False,
+                    },
+                )
                 resp.raise_for_status()
-                for line in resp.iter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    data = line[6:]
-                    if data == "[DONE]":
-                        break
-                    try:
-                        event = json.loads(data)
-                    except (json.JSONDecodeError, ValueError):
-                        continue
-                    if event.get("type") == "content_block_delta":
-                        chunk = event.get("delta", {}).get("text", "")
-                        if chunk:
-                            response_text += chunk
+                response_text = resp.json().get("message", {}).get("content", "")
+
+        else:
+            # Anthropic Claude (streaming)
+            api_key = API_KEY
+            if os.path.exists(settings_path):
+                with open(settings_path) as f:
+                    s = json.load(f)
+                    custom_key = s.get("api_keys", {}).get("anthropic", "")
+                    if custom_key.startswith("sk-"):
+                        api_key = custom_key
+
+            with httpx.Client(timeout=30.0) as client:
+                with client.stream(
+                    "POST", "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json={
+                        "model": llm_model or CLAUDE_MODEL,
+                        "max_tokens": 300,
+                        "system": SYSTEM_PROMPT,
+                        "messages": messages,
+                        "stream": True,
+                    },
+                ) as resp:
+                    resp.raise_for_status()
+                    for line in resp.iter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data = line[6:]
+                        if data == "[DONE]":
+                            break
+                        try:
+                            event = json.loads(data)
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+                        if event.get("type") == "content_block_delta":
+                            chunk = event.get("delta", {}).get("text", "")
+                            if chunk:
+                                response_text += chunk
+
         llm_ms = (time.time() - t0) * 1000
 
         self._conversation.append({"role": "assistant", "content": response_text})
@@ -234,7 +270,14 @@ class AIWorker(QThread):
         if len(clean) > 400:
             clean = clean[:400] + "."
 
-        samples, sr = self._kokoro.create(clean, voice="am_onyx", speed=1.0, lang="en-us")
+        tts_voice = "am_onyx"
+        tts_speed = 1.0
+        if os.path.exists(settings_path):
+            with open(settings_path) as f:
+                vs = json.load(f)
+                tts_voice = vs.get("tts_voice", "am_onyx")
+                tts_speed = vs.get("tts_speed", 1.0)
+        samples, sr = self._kokoro.create(clean, voice=tts_voice, speed=tts_speed, lang="en-us")
         tts_ms = (time.time() - t0) * 1000
 
         print(f"  [{stt_ms:.0f}ms stt | {llm_ms:.0f}ms llm | {tts_ms:.0f}ms tts]")
@@ -474,8 +517,43 @@ class OrbWidget(QWidget):
             act.triggered.connect(lambda checked, sid=skin_id: self._set_skin(sid))
 
         menu.addSeparator()
+
+        # Dictation mode
+        dict_act = menu.addAction("Dictation Mode")
+        dict_act.triggered.connect(self._toggle_dictation)
+
+        # Preferences — opens settings web UI
+        pref_act = menu.addAction("Preferences")
+        pref_act.triggered.connect(self._open_preferences)
+
+        menu.addSeparator()
         menu.addAction("Quit VII").triggered.connect(QApplication.quit)
         menu.exec(event.globalPos())
+
+    def _open_preferences(self):
+        """Launch settings web UI and open in browser."""
+        import webbrowser
+        # Start settings server if not running
+        if not hasattr(self, '_settings_proc') or self._settings_proc is None or self._settings_proc.poll() is not None:
+            import sys
+            python = os.path.join(PROJECT_ROOT, "tts-venv", "bin", "python3")
+            if not os.path.exists(python):
+                python = sys.executable
+            self._settings_proc = subprocess.Popen(
+                [python, os.path.join(PROJECT_ROOT, "settings_ui.py")],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            import time
+            time.sleep(1)
+        webbrowser.open("http://localhost:7748")
+
+    def _toggle_dictation(self):
+        """Toggle dictation mode — types what you say instead of talking to AI."""
+        self._dictation_mode = not getattr(self, '_dictation_mode', False)
+        if self._dictation_mode:
+            self.set_status("Dictation ON")
+        else:
+            self.set_status("Tap to speak")
 
     def _set_skin(self, skin_id):
         if self.skin_manager.set_active(skin_id):
