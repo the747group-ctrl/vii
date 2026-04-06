@@ -26,6 +26,7 @@ from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal, QThread
 from PyQt6.QtGui import (QPainter, QColor, QRadialGradient, QPen, QFont,
                           QIcon, QPixmap, QAction)
 from core.skins import SkinManager
+from core.db import new_conversation, add_message, get_messages, get_latest_conversation
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
@@ -87,8 +88,9 @@ class AIWorker(QThread):
         self._whisper = None
         self._kokoro = None
         self._task_queue = queue.Queue()
-        self._conversation = []  # memory
         self._models_ready = False
+        # Persistent conversation
+        self._conv_id = get_latest_conversation() or new_conversation("VII Session")
 
     @property
     def ready(self):
@@ -160,8 +162,8 @@ class AIWorker(QThread):
         # ── LLM ──
         import httpx
 
-        self._conversation.append({"role": "user", "content": text})
-        messages = self._conversation[-20:]
+        add_message(self._conv_id, "user", text)
+        messages = get_messages(self._conv_id, limit=20)
 
         # Load settings for provider selection
         settings_path = os.path.join(PROJECT_ROOT, "config", "vii-settings.json")
@@ -236,7 +238,7 @@ class AIWorker(QThread):
 
         llm_ms = (time.time() - t0) * 1000
 
-        self._conversation.append({"role": "assistant", "content": response_text})
+        add_message(self._conv_id, "assistant", response_text)
 
         # ── Execute Actions ──
         action_re = re.compile(r'\[ACTION:\s*(.+?)\]')
