@@ -54,7 +54,7 @@ API_KEY = load_api_key()
 
 SYSTEM_PROMPT = (
     "You are VII, a voice-controlled AI assistant by The 747 Lab.\n"
-    "You can control the user's Mac AND have natural conversations.\n\n"
+    "You can control the user's Mac, see their screen, AND have natural conversations.\n\n"
     "ACTIONS — when the user asks you to DO something on their computer:\n"
     "  [ACTION: open-app Safari]\n"
     "  [ACTION: open-url https://google.com/search?q=query+here]\n"
@@ -122,6 +122,28 @@ class AIWorker(QThread):
         if self._models_ready:
             self._task_queue.put(audio_data)
 
+    def _capture_screen_b64(self):
+        """Capture screenshot and return as base64 JPEG."""
+        import tempfile, base64
+        png = tempfile.mktemp(suffix=".png")
+        subprocess.run(["screencapture", "-x", "-C", png], capture_output=True)
+        if not os.path.exists(png):
+            return None
+        from PIL import Image
+        import io
+        img = Image.open(png)
+        if img.width > 1280:
+            ratio = 1280 / img.width
+            img = img.resize((1280, int(img.height * ratio)), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=50)
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        os.unlink(png)
+        return b64
+
+    def _new_conversation(self):
+        self._conv_id = new_conversation("VII Session")
+
     def run(self):
         while True:
             try:
@@ -159,11 +181,30 @@ class AIWorker(QThread):
         self.transcript_ready.emit(text)
         self.status_changed.emit("Thinking...")
 
+        # Vision — detect screen-related queries
+        vision_triggers = ["screen", "see", "look at", "what's this", "what is this",
+                           "show me", "read this", "what do you see", "analyze"]
+        is_vision = any(t in lower for t in vision_triggers)
+        screenshot_b64 = None
+        if is_vision:
+            self.status_changed.emit("Capturing screen...")
+            screenshot_b64 = self._capture_screen_b64()
+
         # ── LLM ──
         import httpx
 
         add_message(self._conv_id, "user", text)
         messages = get_messages(self._conv_id, limit=20)
+
+        # If vision, replace last user message with image + text
+        if screenshot_b64 and messages:
+            messages[-1] = {
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": screenshot_b64}},
+                    {"type": "text", "text": text},
+                ],
+            }
 
         # Load settings for provider selection
         settings_path = os.path.join(PROJECT_ROOT, "config", "vii-settings.json")
