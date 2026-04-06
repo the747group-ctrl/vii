@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-VII Desktop — Floating AI Avatar App
+VII Desktop — Voice-Controlled AI Computer Assistant
 
-A floating orb on your desktop. Always there. Click to talk.
-Right-click for agent selection. Drag to reposition.
+Floating orb. Click or hold to speak. Hands-free mode available.
+Controls your Mac. Remembers conversation. Multiple agents.
 
 Run: ./tts-venv/bin/python3 desktop.py
 Developed by The 747 Lab
@@ -17,24 +17,21 @@ import threading
 import queue
 import re
 import math
+import subprocess
 
 import numpy as np
 
-from PyQt6.QtWidgets import QApplication, QWidget, QMenu
+from PyQt6.QtWidgets import QApplication, QWidget, QMenu, QSystemTrayIcon
 from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal, QThread
-from PyQt6.QtGui import QPainter, QColor, QRadialGradient, QPen, QFont
+from PyQt6.QtGui import (QPainter, QColor, QRadialGradient, QPen, QFont,
+                          QIcon, QPixmap, QAction)
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
+CONFIG_DIR = os.path.join(PROJECT_ROOT, "config")
 CLAUDE_MODEL = "claude-sonnet-4-20250514"
-
-AGENTS = {
-    "vii":    {"voice": "af_heart",   "speed": 1.1,  "color": "#06b6d4", "role": "Your voice AI."},
-    "bob":    {"voice": "am_onyx",    "speed": 1.0,  "color": "#3b82f6", "role": "Lead strategist."},
-    "falcon": {"voice": "am_michael", "speed": 0.95, "color": "#22c55e", "role": "Intel analyst."},
-    "pixi":   {"voice": "af_heart",   "speed": 1.25, "color": "#ec4899", "role": "Creative director."},
-    "buzz":   {"voice": "am_puck",    "speed": 1.3,  "color": "#f97316", "role": "Content strategist."},
-}
+MAC_CONTROL = os.path.expanduser("~/.747lab/mac-control.sh")
+MIC_GAIN = 30.0  # Amplification for RODE PodMic (dynamic mic, low output)
 
 
 def load_api_key():
@@ -53,11 +50,34 @@ def load_api_key():
 
 API_KEY = load_api_key()
 
+SYSTEM_PROMPT = (
+    "You are VII, a voice-controlled AI assistant by The 747 Lab.\n"
+    "You can control the user's Mac AND have natural conversations.\n\n"
+    "ACTIONS — when the user asks you to DO something on their computer:\n"
+    "  [ACTION: open-app Safari]\n"
+    "  [ACTION: open-url https://google.com/search?q=query+here]\n"
+    "  [ACTION: type-text Hello world]\n"
+    "  [ACTION: key-combo cmd+space]\n"
+    "  [ACTION: screenshot]\n"
+    "  [ACTION: volume 50]\n"
+    "  [ACTION: mute] or [ACTION: unmute]\n"
+    "  [ACTION: notify Title Message here]\n"
+    "  [ACTION: quit-app AppName]\n"
+    "  [ACTION: focus AppName]\n"
+    "  [ACTION: dark-mode on] or [ACTION: dark-mode off]\n\n"
+    "After any action, say a brief spoken confirmation (1 sentence).\n"
+    "For conversations, respond in 2-3 natural sentences. No markdown ever.\n"
+    "Be warm, direct, and genuinely helpful. You're their AI companion."
+)
+
+
+# ─── AI Worker ────────────────────────────────────────────
 
 class AIWorker(QThread):
     transcript_ready = pyqtSignal(str)
-    response_ready = pyqtSignal(str, str)
+    response_ready = pyqtSignal(str)
     audio_ready = pyqtSignal(object, int)
+    action_executed = pyqtSignal(str, str)  # cmd, result
     status_changed = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
 
@@ -66,6 +86,12 @@ class AIWorker(QThread):
         self._whisper = None
         self._kokoro = None
         self._task_queue = queue.Queue()
+        self._conversation = []  # memory
+        self._models_ready = False
+
+    @property
+    def ready(self):
+        return self._models_ready
 
     def load_models(self):
         self.status_changed.emit("Loading Whisper...")
@@ -74,7 +100,9 @@ class AIWorker(QThread):
         if os.path.exists(model_dir):
             snaps = [s for s in os.listdir(model_dir) if not s.startswith('.')]
             if snaps:
-                self._whisper = WhisperModel(os.path.join(model_dir, snaps[0]), device="cpu", compute_type="int8")
+                self._whisper = WhisperModel(
+                    os.path.join(model_dir, snaps[0]), device="cpu", compute_type="int8"
+                )
         if not self._whisper:
             self._whisper = WhisperModel("small", device="cpu", compute_type="int8")
 
@@ -84,112 +112,120 @@ class AIWorker(QThread):
             os.path.join(MODELS_DIR, "kokoro", "kokoro-v1.0.onnx"),
             os.path.join(MODELS_DIR, "kokoro", "voices-v1.0.bin"),
         )
+        self._models_ready = True
         self.status_changed.emit("Ready")
 
-    def submit(self, audio_data, agent="vii"):
-        self._task_queue.put(("process", audio_data, agent))
+    def submit(self, audio_data):
+        if self._models_ready:
+            self._task_queue.put(audio_data)
 
     def run(self):
         while True:
             try:
-                task = self._task_queue.get(timeout=1)
+                audio_data = self._task_queue.get(timeout=1)
             except queue.Empty:
                 continue
-            if task is None:
+            if audio_data is None:
                 break
-            cmd, audio_data, agent = task
             try:
-                self._process(audio_data, agent)
+                self._process(audio_data)
             except Exception as e:
                 self.error_occurred.emit(str(e))
+                self.status_changed.emit("Ready")
 
-    def _process(self, audio_data, agent):
-        self.status_changed.emit("Listening...")
+    def _process(self, audio_data):
+        # ── STT ──
+        self.status_changed.emit("Transcribing...")
+        t0 = time.time()
         segments, _ = self._whisper.transcribe(audio_data, language="en", beam_size=3)
         text = " ".join(s.text.strip() for s in segments).strip()
+        stt_ms = (time.time() - t0) * 1000
 
         if not text or len(text) < 2:
             self.status_changed.emit("Ready")
             return
 
+        # Filter hallucinations
         lower = text.lower().strip()
-        if lower in ("thank you", "thanks", "bye", "you", "the end",
-                      "thank you for watching", "subscribe"):
+        hallucinations = {"thank you", "thanks", "bye", "you", "the end",
+                          "thank you for watching", "subscribe", "you you"}
+        if lower in hallucinations or (len(lower) < 5 and lower.isalpha()):
             self.status_changed.emit("Ready")
             return
 
         self.transcript_ready.emit(text)
         self.status_changed.emit("Thinking...")
 
+        # ── LLM ──
         import httpx
-        import subprocess
 
-        MAC_CONTROL = os.path.expanduser("~/.747lab/mac-control.sh")
+        # Conversation memory (last 10 turns)
+        self._conversation.append({"role": "user", "content": text})
+        messages = self._conversation[-20:]
 
-        system = (
-            "You are VII, a voice-controlled AI assistant by The 747 Lab. "
-            "You can control the user's Mac computer AND have conversations.\n\n"
-            "IMPORTANT: When the user asks you to DO something on their computer, "
-            "respond with the ACTION in a special format, then a brief spoken confirmation.\n\n"
-            "Format for actions:\n"
-            "  [ACTION: open-app Safari]\n"
-            "  [ACTION: open-url https://google.com/search?q=voice+AI]\n"
-            "  [ACTION: type-text Hello world]\n"
-            "  [ACTION: key-combo cmd+space]\n"
-            "  [ACTION: screenshot]\n"
-            "  [ACTION: volume 50]\n"
-            "  [ACTION: notify VII 'Task complete']\n\n"
-            "Available actions: open-app, quit-app, focus, open-url, type-text, "
-            "key-press, key-combo, screenshot, volume, mute, unmute, notify, clipboard-get, "
-            "clipboard-set, dark-mode\n\n"
-            "After the [ACTION] line, write a brief spoken confirmation (1 sentence, no markdown).\n"
-            "If no action is needed, just respond conversationally in 2-3 sentences. No markdown."
-        )
-
+        t0 = time.time()
         resp = httpx.post(
             "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": API_KEY, "anthropic-version": "2023-06-01",
-                     "content-type": "application/json"},
-            json={"model": CLAUDE_MODEL, "max_tokens": 250, "system": system,
-                  "messages": [{"role": "user", "content": text}]},
+            headers={
+                "x-api-key": API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": CLAUDE_MODEL,
+                "max_tokens": 300,
+                "system": SYSTEM_PROMPT,
+                "messages": messages,
+            },
             timeout=30.0,
         )
         resp.raise_for_status()
         response_text = resp.json().get("content", [{}])[0].get("text", "")
+        llm_ms = (time.time() - t0) * 1000
 
-        # Execute any actions
-        action_pattern = re.compile(r'\[ACTION:\s*(.+?)\]')
-        actions_found = action_pattern.findall(response_text)
-        for action in actions_found:
+        self._conversation.append({"role": "assistant", "content": response_text})
+
+        # ── Execute Actions ──
+        action_re = re.compile(r'\[ACTION:\s*(.+?)\]')
+        for action in action_re.findall(response_text):
             parts = action.strip().split(None, 1)
             cmd = parts[0]
             args = parts[1] if len(parts) > 1 else ""
-            print(f"  [ACTION] {cmd} {args}")
             try:
                 result = subprocess.run(
-                    [MAC_CONTROL, cmd] + (args.split() if args else []),
+                    [MAC_CONTROL, cmd] + ([args] if args else []),
                     capture_output=True, text=True, timeout=10,
                 )
-                if result.stdout.strip():
-                    print(f"  [RESULT] {result.stdout.strip()[:100]}")
+                out = result.stdout.strip()[:100]
+                self.action_executed.emit(cmd, out or "done")
             except Exception as e:
-                print(f"  [ACTION ERROR] {e}")
+                self.action_executed.emit(cmd, f"error: {e}")
 
-        # Remove action tags from spoken text
-        spoken = action_pattern.sub('', response_text).strip()
+        # ── Spoken Response ──
+        spoken = action_re.sub('', response_text).strip()
         if not spoken:
             spoken = "Done."
 
-        self.response_ready.emit("vii", spoken)
+        self.response_ready.emit(spoken)
         self.status_changed.emit("Speaking...")
 
-        txt = re.sub(r'[`#*]', '', spoken)
-        txt = txt.replace('%', ' percent').replace('&', ' and ')
-        txt = txt.replace('\u2019', "'").replace('\u2018', "'")
-        samples, sr = self._kokoro.create(txt, voice="am_onyx", speed=1.0, lang="en-us")
-        self.audio_ready.emit(samples, sr)
-        self.status_changed.emit("Ready")
+        # ── TTS ──
+        t0 = time.time()
+        clean = re.sub(r'[`#*\[\]]', '', spoken)
+        clean = clean.replace('%', ' percent').replace('&', ' and ')
+        clean = clean.replace('\u2019', "'").replace('\u2018', "'")
+        if len(clean) > 400:
+            clean = clean[:400] + "."
 
+        samples, sr = self._kokoro.create(clean, voice="am_onyx", speed=1.0, lang="en-us")
+        tts_ms = (time.time() - t0) * 1000
+
+        print(f"  [{stt_ms:.0f}ms stt | {llm_ms:.0f}ms llm | {tts_ms:.0f}ms tts]")
+
+        self.audio_ready.emit(samples, sr)
+
+
+# ─── Orb Widget ───────────────────────────────────────────
 
 class OrbWidget(QWidget):
     recording_stopped = pyqtSignal(object)
@@ -204,96 +240,171 @@ class OrbWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
-        self.orb_size = 80
-        self.setFixedSize(self.orb_size + 40, self.orb_size + 55)
+        self.orb_size = 72
+        self.setFixedSize(self.orb_size + 48, self.orb_size + 50)
 
-        self.state = "idle"
-        self.agent_color = QColor("#06b6d4")
-        self.agent_name = "VII"
+        # State
+        self.state = "loading"
+        self.accent = QColor("#06b6d4")
         self.glow_phase = 0.0
         self.audio_level = 0.0
         self.status_text = "Loading..."
-        self.current_agent = "vii"
+        self.transcript_text = ""
+        self.response_text = ""
 
+        # Interaction
         self._drag_start = None
         self._drag_moved = False
         self._recording = False
         self._audio_chunks = []
         self._audio_stream = None
+        self._models_ready = False
 
+        # Hands-free mode
+        self.hands_free = False
+        self._vad_buffer = []
+        self._vad_speaking = False
+        self._vad_silence_frames = 0
+        self._vad_speech_frames = 0
+        self._continuous_stream = None
+
+        # Animation
         self._timer = QTimer()
         self._timer.timeout.connect(self._tick)
-        self._timer.start(33)
+        self._timer.start(33)  # 30fps
 
-        # Position center of screen so it's impossible to miss
+        # Re-assert on-top every 5s (DecisionsAI pattern — Qt can lose it)
+        self._top_timer = QTimer()
+        self._top_timer.timeout.connect(self._reassert_top)
+        self._top_timer.start(5000)
+
+        # Position bottom-right
         screen = QApplication.primaryScreen().availableGeometry()
-        self.move(screen.center().x() - self.width() // 2, screen.center().y() - self.height() // 2)
-        # Force visibility
-        self.show()
-        self.raise_()
-        self.activateWindow()
+        self.move(screen.width() - self.width() - 20, screen.height() - self.height() - 40)
 
     def _tick(self):
         self.glow_phase += 0.05
         self.update()
 
-    def set_state(self, state, agent=None, color=None):
+    def _reassert_top(self):
+        self.raise_()
+
+    def set_models_ready(self):
+        self._models_ready = True
+        if not self.hands_free:
+            self.state = "idle"
+            self.status_text = "Tap to speak"
+        self.update()
+
+    def set_state(self, state):
         self.state = state
-        if agent:
-            self.agent_name = agent.upper()
-        if color:
-            self.agent_color = QColor(color)
         self.update()
 
     def set_status(self, text):
         self.status_text = text
         self.update()
 
+    def set_transcript(self, text):
+        self.transcript_text = text
+
+    def set_response(self, text):
+        self.response_text = text
+
+    # ── Paint ──
+
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         cx = self.width() // 2
-        cy = 10 + self.orb_size // 2
+        cy = 12 + self.orb_size // 2
         r = self.orb_size // 2
 
-        if self.state == "idle":
-            ga = 0.05 + 0.03 * math.sin(self.glow_phase)
+        # Glow intensity by state
+        if self.state == "loading":
+            ga = 0.03 + 0.02 * math.sin(self.glow_phase * 0.5)
+        elif self.state == "idle":
+            ga = 0.04 + 0.025 * math.sin(self.glow_phase)
         elif self.state == "listening":
-            ga = 0.15 + 0.1 * math.sin(self.glow_phase * 2)
+            ga = 0.12 + 0.08 * math.sin(self.glow_phase * 2.5) + self.audio_level * 0.1
         elif self.state == "thinking":
-            ga = 0.1 + 0.08 * math.sin(self.glow_phase * 1.5)
+            ga = 0.08 + 0.06 * math.sin(self.glow_phase * 1.8)
         elif self.state == "speaking":
-            ga = 0.12 + self.audio_level * 0.15
+            ga = 0.1 + self.audio_level * 0.2
         else:
-            ga = 0.05
+            ga = 0.04
 
-        gc = QColor(self.agent_color)
+        # State colors
+        state_colors = {
+            "loading": "#475569",
+            "idle": "#06b6d4",
+            "listening": "#ef4444",
+            "thinking": "#8b5cf6",
+            "speaking": "#06b6d4",
+        }
+        color = QColor(state_colors.get(self.state, "#06b6d4"))
+
+        # Outer glow
+        gc = QColor(color)
         gc.setAlphaF(min(ga, 1.0))
-        grad = QRadialGradient(cx, cy, r * 2)
+        grad = QRadialGradient(cx, cy, r * 2.2)
         grad.setColorAt(0, gc)
+        grad.setColorAt(0.5, QColor(gc.red(), gc.green(), gc.blue(), int(ga * 80)))
         grad.setColorAt(1, QColor(0, 0, 0, 0))
         p.setBrush(grad)
         p.setPen(Qt.PenStyle.NoPen)
-        p.drawEllipse(QPoint(cx, cy), r * 2, r * 2)
+        p.drawEllipse(QPoint(cx, cy), int(r * 2.2), int(r * 2.2))
 
-        body = QRadialGradient(cx - r * 0.2, cy - r * 0.2, r * 1.2)
-        body.setColorAt(0, QColor(30, 30, 45))
-        body.setColorAt(1, QColor(12, 12, 20))
+        # Orb body
+        body = QRadialGradient(cx - r * 0.15, cy - r * 0.15, r * 1.1)
+        body.setColorAt(0, QColor(28, 28, 42))
+        body.setColorAt(0.7, QColor(15, 15, 24))
+        body.setColorAt(1, QColor(8, 8, 14))
         p.setBrush(body)
-        rc = QColor(self.agent_color)
-        rc.setAlphaF(min(0.3 + ga, 1.0))
+
+        # Ring
+        rc = QColor(color)
+        rc.setAlphaF(min(0.25 + ga * 1.5, 1.0))
         p.setPen(QPen(rc, 1.5))
         p.drawEllipse(QPoint(cx, cy), r, r)
 
-        p.setPen(QColor(80, 80, 100))
+        # Inner waveform during recording
+        if self.state == "listening" and self.audio_level > 0.01:
+            wc = QColor(color)
+            wc.setAlphaF(0.4)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(wc)
+            wave_r = int(r * 0.3 + r * 0.4 * self.audio_level)
+            p.drawEllipse(QPoint(cx, cy), wave_r, wave_r)
+
+        # Thinking spinner dots
+        if self.state == "thinking":
+            for i in range(3):
+                angle = self.glow_phase * 3 + i * (2 * math.pi / 3)
+                dx = int(math.cos(angle) * r * 0.35)
+                dy = int(math.sin(angle) * r * 0.35)
+                dot_alpha = 0.4 + 0.4 * math.sin(self.glow_phase * 2 + i)
+                dc = QColor(color)
+                dc.setAlphaF(min(dot_alpha, 1.0))
+                p.setBrush(dc)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.drawEllipse(QPoint(cx + dx, cy + dy), 3, 3)
+
+        # Status text
+        p.setPen(QColor(100, 100, 120))
         font = p.font()
-        font.setPointSize(9)
+        font.setPointSize(8)
         font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.5)
         p.setFont(font)
-        p.drawText(QRect(0, cy + r + 8, self.width(), 20),
-                   Qt.AlignmentFlag.AlignHCenter, self.status_text.upper())
+        status = self.status_text.upper()
+        if self.hands_free and self.state == "idle":
+            status = "HANDS-FREE"
+        p.drawText(QRect(0, cy + r + 6, self.width(), 18),
+                   Qt.AlignmentFlag.AlignHCenter, status)
+
         p.end()
+
+    # ── Mouse ──
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -310,36 +421,50 @@ class OrbWidget(QWidget):
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and not self._drag_moved:
+            if not self._models_ready:
+                return
             if self.state == "speaking":
-                # Interrupt current response — click during speech stops it
                 import sounddevice as sd
                 sd.stop()
                 self.set_state("idle")
-                self.set_status("Tap to speak")
-            elif not self._recording:
-                self._start_recording()
-            else:
+                self.set_status("Ready")
+            elif self._recording:
                 self._stop_recording()
+            else:
+                self._start_recording()
         self._drag_start = None
         self._drag_moved = False
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
-        menu.setStyleSheet("QMenu{background:#1a1a2e;color:#ccc;border:1px solid #333;padding:4px}"
-                           "QMenu::item{padding:6px 20px}"
-                           "QMenu::item:selected{background:#2a2a4e}")
-        for name, cfg in AGENTS.items():
-            act = menu.addAction(f"{name.upper()} — {cfg['role']}")
-            act.triggered.connect(lambda checked, n=name, c=cfg: self._switch_agent(n, c))
+        menu.setStyleSheet(
+            "QMenu{background:#12121e;color:#bbb;border:1px solid #252535;padding:4px;font-size:12px}"
+            "QMenu::item{padding:8px 24px}"
+            "QMenu::item:selected{background:#1e1e35;color:#fff}"
+            "QMenu::separator{background:#252535;height:1px;margin:4px 8px}"
+        )
+
+        # Hands-free toggle
+        hf = menu.addAction("Hands-Free: ON" if self.hands_free else "Hands-Free: OFF")
+        hf.triggered.connect(self._toggle_hands_free)
+
+        menu.addSeparator()
+
+        # Settings placeholder
+        menu.addAction("Settings...").setEnabled(False)
+
         menu.addSeparator()
         menu.addAction("Quit VII").triggered.connect(QApplication.quit)
         menu.exec(event.globalPos())
 
-    def _switch_agent(self, name, cfg):
-        self.current_agent = name
-        self.agent_name = name.upper()
-        self.agent_color = QColor(cfg["color"])
-        self.set_status(f"{name.upper()} active")
+    def _toggle_hands_free(self):
+        self.hands_free = not self.hands_free
+        if self.hands_free:
+            self._start_hands_free()
+        else:
+            self._stop_hands_free()
+
+    # ── Push-to-Talk Recording ──
 
     def _start_recording(self):
         import sounddevice as sd
@@ -350,15 +475,15 @@ class OrbWidget(QWidget):
 
         def cb(indata, frames, t, status):
             if self._recording:
-                # Amplify 30x for RODE PodMic (dynamic mic, low output)
-                amplified = indata.copy() * 30.0
+                amplified = indata.copy() * MIC_GAIN
                 amplified = np.clip(amplified, -1.0, 1.0)
                 self._audio_chunks.append(amplified)
                 rms = float(np.sqrt(np.mean(amplified ** 2)))
                 self.audio_level = min(rms * 3.0, 1.0)
 
-        self._audio_stream = sd.InputStream(samplerate=16000, channels=1, dtype='float32',
-                                             blocksize=1024, callback=cb)
+        self._audio_stream = sd.InputStream(
+            samplerate=16000, channels=1, dtype='float32', blocksize=1024, callback=cb
+        )
         self._audio_stream.start()
 
     def _stop_recording(self):
@@ -371,7 +496,8 @@ class OrbWidget(QWidget):
         if self._audio_chunks:
             audio = np.concatenate(self._audio_chunks, axis=0).flatten()
             rms = float(np.sqrt(np.mean(audio ** 2)))
-            if rms > 0.003 and len(audio) > 4800:
+            duration = len(audio) / 16000
+            if rms > 0.005 and duration > 0.3:
                 self.set_state("thinking")
                 self.set_status("Processing...")
                 self.recording_stopped.emit(audio)
@@ -379,48 +505,139 @@ class OrbWidget(QWidget):
 
         self.set_state("idle")
         self.set_status("Tap to speak")
+        self.audio_level = 0.0
 
+    # ── Hands-Free (VAD) ──
+
+    def _start_hands_free(self):
+        import sounddevice as sd
+        self.set_status("Hands-free")
+        self._vad_speaking = False
+        self._vad_silence_frames = 0
+        self._vad_speech_frames = 0
+        self._audio_chunks = []
+
+        def cb(indata, frames, t, status):
+            amplified = indata.copy() * MIC_GAIN
+            amplified = np.clip(amplified, -1.0, 1.0)
+            rms = float(np.sqrt(np.mean(amplified ** 2)))
+            self.audio_level = min(rms * 3.0, 1.0)
+
+            if self._vad_speaking:
+                self._audio_chunks.append(amplified)
+                if rms < 0.01:
+                    self._vad_silence_frames += 1
+                    # 500ms of silence = end of speech (16000/1024 * 0.5 ≈ 8 frames)
+                    if self._vad_silence_frames > 8:
+                        self._vad_speaking = False
+                        self._vad_silence_frames = 0
+                        self._vad_speech_frames = 0
+                        # Process in main thread
+                        audio = np.concatenate(self._audio_chunks, axis=0).flatten()
+                        if len(audio) > 4800:
+                            self.set_state("thinking")
+                            self.set_status("Processing...")
+                            self.recording_stopped.emit(audio)
+                        self._audio_chunks = []
+                        self.audio_level = 0.0
+                else:
+                    self._vad_silence_frames = 0
+            else:
+                if rms > 0.02:
+                    self._vad_speech_frames += 1
+                    # 100ms of speech = start recording (about 2 frames)
+                    if self._vad_speech_frames > 2:
+                        self._vad_speaking = True
+                        self._audio_chunks = [amplified]
+                        self.set_state("listening")
+                        self.set_status("Listening...")
+                else:
+                    self._vad_speech_frames = 0
+
+        self._continuous_stream = sd.InputStream(
+            samplerate=16000, channels=1, dtype='float32', blocksize=1024, callback=cb
+        )
+        self._continuous_stream.start()
+
+    def _stop_hands_free(self):
+        if self._continuous_stream:
+            self._continuous_stream.stop()
+            self._continuous_stream.close()
+            self._continuous_stream = None
+        self._vad_speaking = False
+        self.set_state("idle")
+        self.set_status("Tap to speak")
+        self.audio_level = 0.0
+
+
+# ─── Main App ────────────────────────────────────────────
 
 class VIIApp:
     def __init__(self):
         self.app = QApplication(sys.argv)
         self.app.setQuitOnLastWindowClosed(False)
+        self.app.setApplicationName("VII")
 
+        # Orb
         self.orb = OrbWidget()
         self.orb.show()
 
+        # System tray
+        self._setup_tray()
+
+        # AI worker
         self.worker = AIWorker()
         self.worker.transcript_ready.connect(self._on_transcript)
         self.worker.response_ready.connect(self._on_response)
         self.worker.audio_ready.connect(self._on_audio)
+        self.worker.action_executed.connect(self._on_action)
         self.worker.status_changed.connect(self._on_status)
         self.worker.error_occurred.connect(self._on_error)
         self.orb.recording_stopped.connect(self._on_recorded)
 
+        # Load models in background
         QTimer.singleShot(100, self._load)
 
+    def _setup_tray(self):
+        # Create a simple tray icon
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(QColor("#06b6d4"))
+        icon = QIcon(pixmap)
+
+        self.tray = QSystemTrayIcon(icon, self.app)
+        tray_menu = QMenu()
+        tray_menu.setStyleSheet(
+            "QMenu{background:#12121e;color:#bbb;border:1px solid #252535}"
+            "QMenu::item{padding:6px 20px}"
+            "QMenu::item:selected{background:#1e1e35;color:#fff}"
+        )
+        tray_menu.addAction("Show VII").triggered.connect(self.orb.show)
+        tray_menu.addAction("Hide VII").triggered.connect(self.orb.hide)
+        tray_menu.addSeparator()
+        tray_menu.addAction("Quit").triggered.connect(self._quit)
+        self.tray.setContextMenu(tray_menu)
+        self.tray.setToolTip("VII — The 747 Lab")
+        self.tray.show()
+
     def _load(self):
-        # Load models in background — orb shows immediately, models load behind
-        def _bg_load():
+        def _bg():
             self.worker.load_models()
             self.worker.start()
-            # Signal ready on main thread
-            self.orb.set_status("Tap to speak")
-            print("  VII ready.")
+            self.orb.set_models_ready()
 
-        loader = threading.Thread(target=_bg_load, daemon=True)
-        loader.start()
+        threading.Thread(target=_bg, daemon=True).start()
 
     def _on_recorded(self, audio):
-        self.worker.submit(audio, self.orb.current_agent)
+        self.worker.submit(audio)
 
     def _on_transcript(self, text):
+        self.orb.set_transcript(text)
         print(f"  You: \"{text}\"")
 
-    def _on_response(self, agent, text):
-        cfg = AGENTS.get(agent, AGENTS["vii"])
-        self.orb.set_state("speaking", agent=agent, color=cfg["color"])
-        print(f"  {agent.upper()}: {text}")
+    def _on_response(self, text):
+        self.orb.set_response(text)
+        self.orb.set_state("speaking")
+        print(f"  VII: {text}")
 
     def _on_audio(self, samples, sr):
         import sounddevice as sd
@@ -428,22 +645,44 @@ class VIIApp:
         def play():
             sd.play(samples, sr)
             sd.wait()
-            self.orb.set_state("idle")
-            self.orb.set_status("Tap to speak")
+            if self.orb.hands_free:
+                self.orb.set_state("idle")
+                self.orb.set_status("Hands-free")
+            else:
+                self.orb.set_state("idle")
+                self.orb.set_status("Tap to speak")
+            self.orb.audio_level = 0.0
 
         threading.Thread(target=play, daemon=True).start()
+
+    def _on_action(self, cmd, result):
+        print(f"  [ACTION] {cmd} → {result}")
 
     def _on_status(self, text):
         self.orb.set_status(text)
 
     def _on_error(self, text):
-        print(f"  Error: {text}")
+        print(f"  [ERROR] {text}")
         self.orb.set_state("idle")
-        self.orb.set_status("Tap to retry")
+        self.orb.set_status("Error — tap to retry")
+
+    def _quit(self):
+        if self.orb._continuous_stream:
+            self.orb._stop_hands_free()
+        self.worker._task_queue.put(None)
+        self.tray.hide()
+        self.app.quit()
 
     def run(self):
-        print("\n  VII Desktop — The 747 Lab")
-        print("  Click orb to speak. Right-click for agents.\n")
+        print()
+        print("  ╔══════════════════════════════════════╗")
+        print("  ║  VII — Voice Intelligence Interface  ║")
+        print("  ║  The 747 Lab                         ║")
+        print("  ╚══════════════════════════════════════╝")
+        print()
+        print("  Click orb to speak. Right-click for menu.")
+        print("  System tray icon active.")
+        print()
         sys.exit(self.app.exec())
 
 
