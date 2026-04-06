@@ -10,6 +10,7 @@ mod response_watcher;
 mod streaming_agent;
 mod transcribe;
 mod tts;
+mod vad;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
