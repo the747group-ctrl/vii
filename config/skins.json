@@ -1,0 +1,44 @@
+{
+  "active_skin": "orb",
+  "skins": {
+    "orb": {
+      "name": "Classic Orb",
+      "type": "orb",
+      "size": 80,
+      "colors": {
+        "idle": "#06b6d4",
+        "listening": "#ef4444",
+        "thinking": "#6366f1",
+        "speaking": "#06b6d4"
+      },
+      "glow": true,
+      "glow_intensity": 1.0
+    },
+    "minimal": {
+      "name": "Minimal Dot",
+      "type": "orb",
+      "size": 40,
+      "colors": {
+        "idle": "#ffffff",
+        "listening": "#ef4444",
+        "thinking": "#a855f7",
+        "speaking": "#22c55e"
+      },
+      "glow": false,
+      "glow_intensity": 0.5
+    },
+    "747": {
+      "name": "747 Brand",
+      "type": "orb",
+      "size": 80,
+      "colors": {
+        "idle": "#f97316",
+        "listening": "#ef4444",
+        "thinking": "#f97316",
+        "speaking": "#eab308"
+      },
+      "glow": true,
+      "glow_intensity": 1.2
+    }
+  }
+}
