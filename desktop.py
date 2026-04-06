@@ -157,31 +157,47 @@ class AIWorker(QThread):
         self.transcript_ready.emit(text)
         self.status_changed.emit("Thinking...")
 
-        # ── LLM ──
+        # ── LLM (streaming for speed) ──
         import httpx
 
-        # Conversation memory (last 10 turns)
         self._conversation.append({"role": "user", "content": text})
         messages = self._conversation[-20:]
 
         t0 = time.time()
-        resp = httpx.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": CLAUDE_MODEL,
-                "max_tokens": 300,
-                "system": SYSTEM_PROMPT,
-                "messages": messages,
-            },
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        response_text = resp.json().get("content", [{}])[0].get("text", "")
+        response_text = ""
+
+        # Stream response — first tokens arrive faster
+        with httpx.Client(timeout=30.0) as client:
+            with client.stream(
+                "POST", "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": CLAUDE_MODEL,
+                    "max_tokens": 300,
+                    "system": SYSTEM_PROMPT,
+                    "messages": messages,
+                    "stream": True,
+                },
+            ) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    try:
+                        event = json.loads(data)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                    if event.get("type") == "content_block_delta":
+                        chunk = event.get("delta", {}).get("text", "")
+                        if chunk:
+                            response_text += chunk
         llm_ms = (time.time() - t0) * 1000
 
         self._conversation.append({"role": "assistant", "content": response_text})
