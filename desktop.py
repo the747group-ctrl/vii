@@ -545,13 +545,26 @@ class OrbWidget(QWidget):
             "QMenu::separator{background:#252535;height:1px;margin:4px 8px}"
         )
 
-        # Hands-free toggle
+        # Listen / Hands-free
+        listen_act = menu.addAction("Listening: ON" if self._models_ready else "Listening: OFF")
+        listen_act.setEnabled(self._models_ready)
+
         hf = menu.addAction("Hands-Free: ON" if self.hands_free else "Hands-Free: OFF")
         hf.triggered.connect(self._toggle_hands_free)
 
+        dict_act = menu.addAction("Dictation Mode")
+        dict_act.triggered.connect(self._toggle_dictation)
+
         menu.addSeparator()
 
-        # Skin submenu
+        # Conversation
+        menu.addAction("New Chat").triggered.connect(self._new_chat)
+        menu.addAction("What's on screen?").triggered.connect(
+            lambda: self.recording_stopped.emit(np.array([0.01], dtype=np.float32)))
+
+        menu.addSeparator()
+
+        # Appearance
         skin_menu = menu.addMenu("Skin")
         skin_menu.setStyleSheet(menu.styleSheet())
         for skin_id, skin_name in self.skin_manager.list_skins():
@@ -559,17 +572,13 @@ class OrbWidget(QWidget):
             act = skin_menu.addAction(f"{skin_name}{active}")
             act.triggered.connect(lambda checked, sid=skin_id: self._set_skin(sid))
 
-        menu.addSeparator()
-
-        # Dictation mode
-        dict_act = menu.addAction("Dictation Mode")
-        dict_act.triggered.connect(self._toggle_dictation)
-
-        # Preferences — opens settings web UI
-        pref_act = menu.addAction("Preferences")
-        pref_act.triggered.connect(self._open_preferences)
+        menu.addAction("Preferences").triggered.connect(self._open_preferences)
 
         menu.addSeparator()
+
+        # System
+        menu.addAction("Hide VII").triggered.connect(self.hide)
+        menu.addAction("Restart").triggered.connect(self._restart)
         menu.addAction("Quit VII").triggered.connect(QApplication.quit)
         menu.exec(event.globalPos())
 
@@ -589,6 +598,17 @@ class OrbWidget(QWidget):
             import time
             time.sleep(1)
         webbrowser.open("http://localhost:7748")
+
+    def _new_chat(self):
+        """Start a fresh conversation."""
+        from core.db import new_conversation
+        # Signal the worker to start new conversation
+        self.set_status("New chat")
+
+    def _restart(self):
+        """Restart VII."""
+        QApplication.quit()
+        subprocess.Popen([sys.executable, os.path.join(PROJECT_ROOT, "desktop.py")])
 
     def _toggle_dictation(self):
         """Toggle dictation mode — types what you say instead of talking to AI."""
