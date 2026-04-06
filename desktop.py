@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import QApplication, QWidget, QMenu, QSystemTrayIcon
 from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, pyqtSignal, QThread
 from PyQt6.QtGui import (QPainter, QColor, QRadialGradient, QPen, QFont,
                           QIcon, QPixmap, QAction)
+from core.skins import SkinManager
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
@@ -240,7 +241,10 @@ class OrbWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
-        self.orb_size = 72
+        # Skin system
+        self.skin_manager = SkinManager()
+        self.skin = self.skin_manager.active_skin()
+        self.orb_size = self.skin.size
         self.setFixedSize(self.orb_size + 48, self.orb_size + 50)
 
         # State
@@ -334,17 +338,12 @@ class OrbWidget(QWidget):
         else:
             ga = 0.04
 
-        # State colors
-        state_colors = {
-            "loading": "#475569",
-            "idle": "#06b6d4",
-            "listening": "#ef4444",
-            "thinking": "#8b5cf6",
-            "speaking": "#06b6d4",
-        }
-        color = QColor(state_colors.get(self.state, "#06b6d4"))
+        # Colors from skin
+        color = QColor(self.skin.color_for_state(self.state) if self.state != "loading" else "#475569")
+        glow_mult = self.skin.glow_intensity if self.skin.glow else 0.3
 
-        # Outer glow
+        # Outer glow (scaled by skin intensity)
+        ga = ga * glow_mult
         gc = QColor(color)
         gc.setAlphaF(min(ga, 1.0))
         grad = QRadialGradient(cx, cy, r * 2.2)
@@ -450,12 +449,25 @@ class OrbWidget(QWidget):
 
         menu.addSeparator()
 
-        # Settings placeholder
-        menu.addAction("Settings...").setEnabled(False)
+        # Skin submenu
+        skin_menu = menu.addMenu("Skin")
+        skin_menu.setStyleSheet(menu.styleSheet())
+        for skin_id, skin_name in self.skin_manager.list_skins():
+            active = " *" if skin_id == self.skin_manager._active else ""
+            act = skin_menu.addAction(f"{skin_name}{active}")
+            act.triggered.connect(lambda checked, sid=skin_id: self._set_skin(sid))
 
         menu.addSeparator()
         menu.addAction("Quit VII").triggered.connect(QApplication.quit)
         menu.exec(event.globalPos())
+
+    def _set_skin(self, skin_id):
+        if self.skin_manager.set_active(skin_id):
+            self.skin = self.skin_manager.active_skin()
+            self.orb_size = self.skin.size
+            self.setFixedSize(self.orb_size + 48, self.orb_size + 50)
+            self.set_status(f"Skin: {self.skin.name}")
+            self.update()
 
     def _toggle_hands_free(self):
         self.hands_free = not self.hands_free
