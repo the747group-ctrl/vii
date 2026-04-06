@@ -113,28 +113,37 @@ class AIWorker(QThread):
             return
 
         lower = text.lower().strip()
-        if lower in ("thank you", "thanks", "bye", "you", "the end"):
+        if lower in ("thank you", "thanks", "bye", "you", "the end",
+                      "thank you for watching", "subscribe"):
             self.status_changed.emit("Ready")
             return
 
         self.transcript_ready.emit(text)
         self.status_changed.emit("Thinking...")
 
-        detected = agent
-        clean = text
-        for name in AGENTS:
-            for prefix in [name + ", ", name + " ", "hey " + name + " "]:
-                if lower.startswith(prefix):
-                    detected = name
-                    clean = text[len(prefix):].strip()
-                    break
-
         import httpx
-        cfg = AGENTS.get(detected, AGENTS["vii"])
+        import subprocess
+
+        MAC_CONTROL = os.path.expanduser("~/.747lab/mac-control.sh")
+
         system = (
-            f"You are {detected.upper() if detected != 'vii' else 'VII'}, "
-            f"a voice AI by The 747 Lab. {cfg['role']} "
-            f"Respond in 2-3 concise spoken sentences. No markdown. Speak naturally."
+            "You are VII, a voice-controlled AI assistant by The 747 Lab. "
+            "You can control the user's Mac computer AND have conversations.\n\n"
+            "IMPORTANT: When the user asks you to DO something on their computer, "
+            "respond with the ACTION in a special format, then a brief spoken confirmation.\n\n"
+            "Format for actions:\n"
+            "  [ACTION: open-app Safari]\n"
+            "  [ACTION: open-url https://google.com/search?q=voice+AI]\n"
+            "  [ACTION: type-text Hello world]\n"
+            "  [ACTION: key-combo cmd+space]\n"
+            "  [ACTION: screenshot]\n"
+            "  [ACTION: volume 50]\n"
+            "  [ACTION: notify VII 'Task complete']\n\n"
+            "Available actions: open-app, quit-app, focus, open-url, type-text, "
+            "key-press, key-combo, screenshot, volume, mute, unmute, notify, clipboard-get, "
+            "clipboard-set, dark-mode\n\n"
+            "After the [ACTION] line, write a brief spoken confirmation (1 sentence, no markdown).\n"
+            "If no action is needed, just respond conversationally in 2-3 sentences. No markdown."
         )
 
         resp = httpx.post(
@@ -142,19 +151,42 @@ class AIWorker(QThread):
             headers={"x-api-key": API_KEY, "anthropic-version": "2023-06-01",
                      "content-type": "application/json"},
             json={"model": CLAUDE_MODEL, "max_tokens": 250, "system": system,
-                  "messages": [{"role": "user", "content": clean}]},
+                  "messages": [{"role": "user", "content": text}]},
             timeout=30.0,
         )
         resp.raise_for_status()
         response_text = resp.json().get("content", [{}])[0].get("text", "")
 
-        self.response_ready.emit(detected, response_text)
+        # Execute any actions
+        action_pattern = re.compile(r'\[ACTION:\s*(.+?)\]')
+        actions_found = action_pattern.findall(response_text)
+        for action in actions_found:
+            parts = action.strip().split(None, 1)
+            cmd = parts[0]
+            args = parts[1] if len(parts) > 1 else ""
+            print(f"  [ACTION] {cmd} {args}")
+            try:
+                result = subprocess.run(
+                    [MAC_CONTROL, cmd] + (args.split() if args else []),
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.stdout.strip():
+                    print(f"  [RESULT] {result.stdout.strip()[:100]}")
+            except Exception as e:
+                print(f"  [ACTION ERROR] {e}")
+
+        # Remove action tags from spoken text
+        spoken = action_pattern.sub('', response_text).strip()
+        if not spoken:
+            spoken = "Done."
+
+        self.response_ready.emit("vii", spoken)
         self.status_changed.emit("Speaking...")
 
-        txt = re.sub(r'[`#*]', '', response_text)
+        txt = re.sub(r'[`#*]', '', spoken)
         txt = txt.replace('%', ' percent').replace('&', ' and ')
         txt = txt.replace('\u2019', "'").replace('\u2018', "'")
-        samples, sr = self._kokoro.create(txt, voice=cfg["voice"], speed=cfg["speed"], lang="en-us")
+        samples, sr = self._kokoro.create(txt, voice="am_onyx", speed=1.0, lang="en-us")
         self.audio_ready.emit(samples, sr)
         self.status_changed.emit("Ready")
 
@@ -193,8 +225,13 @@ class OrbWidget(QWidget):
         self._timer.timeout.connect(self._tick)
         self._timer.start(33)
 
+        # Position center of screen so it's impossible to miss
         screen = QApplication.primaryScreen().availableGeometry()
-        self.move(screen.width() - self.width() - 20, screen.height() - self.height() - 20)
+        self.move(screen.center().x() - self.width() // 2, screen.center().y() - self.height() // 2)
+        # Force visibility
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def _tick(self):
         self.glow_phase += 0.05
@@ -273,7 +310,13 @@ class OrbWidget(QWidget):
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and not self._drag_moved:
-            if not self._recording:
+            if self.state == "speaking":
+                # Interrupt current response — click during speech stops it
+                import sounddevice as sd
+                sd.stop()
+                self.set_state("idle")
+                self.set_status("Tap to speak")
+            elif not self._recording:
                 self._start_recording()
             else:
                 self._stop_recording()
@@ -307,9 +350,12 @@ class OrbWidget(QWidget):
 
         def cb(indata, frames, t, status):
             if self._recording:
-                self._audio_chunks.append(indata.copy())
-                rms = float(np.sqrt(np.mean(indata ** 2)))
-                self.audio_level = min(rms * 5.0, 1.0)
+                # Amplify 30x for RODE PodMic (dynamic mic, low output)
+                amplified = indata.copy() * 30.0
+                amplified = np.clip(amplified, -1.0, 1.0)
+                self._audio_chunks.append(amplified)
+                rms = float(np.sqrt(np.mean(amplified ** 2)))
+                self.audio_level = min(rms * 3.0, 1.0)
 
         self._audio_stream = sd.InputStream(samplerate=16000, channels=1, dtype='float32',
                                              blocksize=1024, callback=cb)
@@ -354,9 +400,16 @@ class VIIApp:
         QTimer.singleShot(100, self._load)
 
     def _load(self):
-        self.worker.load_models()
-        self.worker.start()
-        self.orb.set_status("Tap to speak")
+        # Load models in background — orb shows immediately, models load behind
+        def _bg_load():
+            self.worker.load_models()
+            self.worker.start()
+            # Signal ready on main thread
+            self.orb.set_status("Tap to speak")
+            print("  VII ready.")
+
+        loader = threading.Thread(target=_bg_load, daemon=True)
+        loader.start()
 
     def _on_recorded(self, audio):
         self.worker.submit(audio, self.orb.current_agent)
