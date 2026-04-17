@@ -33,7 +33,15 @@ MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
 CONFIG_DIR = os.path.join(PROJECT_ROOT, "config")
 CLAUDE_MODEL = "claude-sonnet-4-20250514"
 MAC_CONTROL = os.path.expanduser("~/.747lab/mac-control.sh")
-MIC_GAIN = 30.0  # Amplification for RODE PodMic (dynamic mic, low output)
+def detect_mic_gain():
+    """Auto-detect mic gain. Dynamic mics need ~30x, condensers need ~1-5x."""
+    settings_path = os.path.join(PROJECT_ROOT, "config", "vii-settings.json")
+    if os.path.exists(settings_path):
+        with open(settings_path) as f:
+            return json.load(f).get("mic_gain", 10.0)
+    return 10.0  # Default moderate gain
+
+MIC_GAIN = detect_mic_gain()
 
 
 def load_api_key():
@@ -158,6 +166,14 @@ class AIWorker(QThread):
                 self.error_occurred.emit(str(e))
                 self.status_changed.emit("Ready")
 
+    def new_chat(self):
+        """Start a fresh conversation."""
+        self._conv_id = new_conversation("VII Session")
+
+    def set_dictation_mode(self, enabled):
+        """Toggle dictation mode — type what you say instead of AI response."""
+        self._dictation = enabled
+
     def _process(self, audio_data):
         # ── STT ──
         self.status_changed.emit("Transcribing...")
@@ -179,6 +195,22 @@ class AIWorker(QThread):
             return
 
         self.transcript_ready.emit(text)
+
+        # ── Dictation mode — type what you say, no AI ──
+        if getattr(self, '_dictation', False):
+            self.status_changed.emit("Typing...")
+            try:
+                safe = text.replace('"', '\\"').replace('\\', '\\\\')
+                subprocess.run(
+                    ["osascript", "-e", f'tell application "System Events" to keystroke "{safe}"'],
+                    capture_output=True, timeout=5,
+                )
+                self.response_ready.emit(f"Typed: {text[:60]}")
+            except Exception as e:
+                self.error_occurred.emit(str(e))
+            self.status_changed.emit("Ready")
+            return
+
         self.status_changed.emit("Thinking...")
 
         # Vision — detect screen-related queries
@@ -623,10 +655,9 @@ class OrbWidget(QWidget):
         webbrowser.open("http://localhost:7748")
 
     def _new_chat(self):
-        """Start a fresh conversation."""
-        from core.db import new_conversation
-        # Signal the worker to start new conversation
-        self.set_status("New chat")
+        """Start a fresh conversation — signals the AI worker."""
+        # This gets called from VIIApp which has access to the worker
+        self.set_status("New chat started")
 
     def _restart(self):
         """Restart VII."""
@@ -786,6 +817,20 @@ class VIIApp:
         self.worker.status_changed.connect(self._on_status)
         self.worker.error_occurred.connect(self._on_error)
         self.orb.recording_stopped.connect(self._on_recorded)
+
+        # Wire new chat from orb menu
+        original_new_chat = self.orb._new_chat
+        def _new_chat_wired():
+            self.worker.new_chat()
+            original_new_chat()
+        self.orb._new_chat = _new_chat_wired
+
+        # Wire dictation toggle
+        original_toggle = self.orb._toggle_dictation
+        def _dictation_wired():
+            original_toggle()
+            self.worker.set_dictation_mode(getattr(self.orb, '_dictation_mode', False))
+        self.orb._toggle_dictation = _dictation_wired
 
         # Load models in background
         QTimer.singleShot(100, self._load)
