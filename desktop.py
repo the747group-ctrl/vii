@@ -236,7 +236,7 @@ class AIWorker(QThread):
                 response_text = resp.json().get("message", {}).get("content", "")
 
         else:
-            # Anthropic Claude (streaming)
+            # Anthropic Claude (streaming + overlapped TTS)
             api_key = API_KEY
             if os.path.exists(settings_path):
                 with open(settings_path) as f:
@@ -244,6 +244,21 @@ class AIWorker(QThread):
                     custom_key = s.get("api_keys", {}).get("anthropic", "")
                     if custom_key.startswith("sk-"):
                         api_key = custom_key
+
+            # TTS settings
+            tts_voice = "am_onyx"
+            tts_speed = 1.0
+            if os.path.exists(settings_path):
+                with open(settings_path) as f:
+                    vs = json.load(f)
+                    tts_voice = vs.get("tts_voice", "am_onyx")
+                    tts_speed = vs.get("tts_speed", 1.0)
+
+            # Stream Claude + extract sentences + TTS per sentence + play overlapped
+            sentence_buffer = ""
+            sentences_spoken = []
+            first_audio = False
+            import sounddevice as sd
 
             with httpx.Client(timeout=30.0) as client:
                 with client.stream(
@@ -276,8 +291,43 @@ class AIWorker(QThread):
                             chunk = event.get("delta", {}).get("text", "")
                             if chunk:
                                 response_text += chunk
+                                sentence_buffer += chunk
+
+                                # Check for complete sentence — speak it immediately
+                                for i, ch in enumerate(sentence_buffer):
+                                    if ch in '.!?' and i + 2 < len(sentence_buffer) and sentence_buffer[i+1] == ' ' and sentence_buffer[i+2].isupper():
+                                        sentence = sentence_buffer[:i+1].strip()
+                                        sentence_buffer = sentence_buffer[i+1:].strip()
+                                        if sentence and len(sentence) > 5 and '[ACTION' not in sentence:
+                                            # TTS this sentence NOW while Claude keeps streaming
+                                            clean_s = re.sub(r'[`#*\[\]]', '', sentence)
+                                            clean_s = clean_s.replace('%', ' percent').replace('&', ' and ')
+                                            clean_s = clean_s.replace('\u2019', "'").replace('\u2018', "'")
+                                            if not first_audio:
+                                                first_audio = True
+                                                self.response_ready.emit(sentence)
+                                                self.status_changed.emit("Speaking...")
+                                                print(f"  [first audio: {(time.time()-t0)*1000:.0f}ms]")
+                                            s_samples, s_sr = self._kokoro.create(clean_s, voice=tts_voice, speed=tts_speed, lang="en-us")
+                                            sd.play(s_samples, s_sr)
+                                            sd.wait()
+                                            sentences_spoken.append(sentence)
+                                        break
 
         llm_ms = (time.time() - t0) * 1000
+
+        # Speak any remaining text
+        remaining = sentence_buffer.strip()
+        if remaining and len(remaining) > 3 and '[ACTION' not in remaining:
+            clean_r = re.sub(r'[`#*\[\]]', '', remaining)
+            clean_r = clean_r.replace('%', ' percent').replace('&', ' and ')
+            clean_r = clean_r.replace('\u2019', "'").replace('\u2018', "'")
+            if not first_audio:
+                self.response_ready.emit(remaining)
+                self.status_changed.emit("Speaking...")
+            s_samples, s_sr = self._kokoro.create(clean_r, voice=tts_voice, speed=tts_speed, lang="en-us")
+            sd.play(s_samples, s_sr)
+            sd.wait()
 
         add_message(self._conv_id, "assistant", response_text)
 
@@ -297,35 +347,8 @@ class AIWorker(QThread):
             except Exception as e:
                 self.action_executed.emit(cmd, f"error: {e}")
 
-        # ── Spoken Response ──
-        spoken = action_re.sub('', response_text).strip()
-        if not spoken:
-            spoken = "Done."
-
-        self.response_ready.emit(spoken)
-        self.status_changed.emit("Speaking...")
-
-        # ── TTS ──
-        t0 = time.time()
-        clean = re.sub(r'[`#*\[\]]', '', spoken)
-        clean = clean.replace('%', ' percent').replace('&', ' and ')
-        clean = clean.replace('\u2019', "'").replace('\u2018', "'")
-        if len(clean) > 400:
-            clean = clean[:400] + "."
-
-        tts_voice = "am_onyx"
-        tts_speed = 1.0
-        if os.path.exists(settings_path):
-            with open(settings_path) as f:
-                vs = json.load(f)
-                tts_voice = vs.get("tts_voice", "am_onyx")
-                tts_speed = vs.get("tts_speed", 1.0)
-        samples, sr = self._kokoro.create(clean, voice=tts_voice, speed=tts_speed, lang="en-us")
-        tts_ms = (time.time() - t0) * 1000
-
-        print(f"  [{stt_ms:.0f}ms stt | {llm_ms:.0f}ms llm | {tts_ms:.0f}ms tts]")
-
-        self.audio_ready.emit(samples, sr)
+        print(f"  [{stt_ms:.0f}ms stt | {llm_ms:.0f}ms llm]")
+        self.status_changed.emit("Ready")
 
 
 # ─── Orb Widget ───────────────────────────────────────────
@@ -806,14 +829,18 @@ class VIIApp:
     def _on_response(self, text):
         self.orb.set_response(text)
         self.orb.set_state("speaking")
-        print(f"  VII: {text}")
+        print(f"  VII: {text[:100]}")
 
     def _on_audio(self, samples, sr):
-        import sounddevice as sd
+        # TTS now plays directly in the worker thread (overlapped with streaming)
+        # This callback is kept for compatibility but audio is already played
+        pass
 
-        def play():
-            sd.play(samples, sr)
-            sd.wait()
+    def _on_action(self, cmd, result):
+        print(f"  [ACTION] {cmd} → {result}")
+
+    def _on_status(self, text):
+        if text == "Ready":
             if self.orb.hands_free:
                 self.orb.set_state("idle")
                 self.orb.set_status("Hands-free")
@@ -821,14 +848,8 @@ class VIIApp:
                 self.orb.set_state("idle")
                 self.orb.set_status("Tap to speak")
             self.orb.audio_level = 0.0
-
-        threading.Thread(target=play, daemon=True).start()
-
-    def _on_action(self, cmd, result):
-        print(f"  [ACTION] {cmd} → {result}")
-
-    def _on_status(self, text):
-        self.orb.set_status(text)
+        else:
+            self.orb.set_status(text)
 
     def _on_error(self, text):
         print(f"  [ERROR] {text}")
