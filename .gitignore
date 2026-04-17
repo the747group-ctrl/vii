@@ -6,3 +6,8 @@ __pycache__/
 target/
 whisper-dictation-zero*
 tts-venv/
+config/vii-settings.json
+data/
+logs/
+.vii-pids
+*.db
