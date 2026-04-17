@@ -1,106 +1,115 @@
-# VII Two — Voice Intelligence Interface v2
+# VII — Voice Intelligence Interface
 
-**The upgrade. The market-ready build. The Apple pitch.**
+**Talk to your Mac. It listens, thinks, and acts.**
 
-VII Two builds on the foundation of VII Zero (Phases 1-7) with a reimagined streaming architecture. Inspired by the best open source voice AI work — including DecisionsAI, Keith Schacht's Task Master, and emerging patterns from the wider voice AI community — VII Two is an original creation designed to be the voice interface people actually love using.
+VII is a voice-controlled AI desktop assistant. A floating orb lives on your screen — click it and speak. It answers questions, opens apps, controls your computer, remembers conversations, and sees your screen.
 
-## Vision
+The intelligence of ChatGPT with the hands of Siri, running on your machine.
 
-A voice-first AI interface so smooth, so fast, and so beautiful that Apple (or any major platform) would want to ship it natively. Multiple AI agents with unique voices and personalities, controllable from your desk or your phone.
+Developed by [The 747 Lab](https://747lab.ai).
 
-## What's New in VII Two
+---
 
-| Feature | VII Zero | VII Two |
-|---------|----------|---------|
-| Response latency | 5-8s | <2s (streaming pipeline) |
-| Remote access | None | Full laptop control from phone via Telegram |
-| Avatar animations | Static PNG | WebM with state-driven glow effects |
-| Agent selection | Voice-only dispatch | Voice + visual selection overlay |
-| Echo cancellation | None | NLMS adaptive filter + dual-gate interruption |
-| Hands-free mode | Push-to-talk only | Continuous listening with echo gating |
-| Computer control | Respond only | Execute actions (open apps, run scripts) |
+## Features
+
+- **Voice control** — Click the orb or go hands-free. Speak naturally.
+- **Computer control** — "Open Safari", "Search for flights to Tokyo", "Take a screenshot"
+- **Screen awareness** — "What's on my screen?" — VII sees and understands your display
+- **Conversation memory** — Remembers what you've talked about across sessions
+- **Customizable** — Multiple skins, voices, LLM providers, TTS engines
+- **Remote access** — Control your Mac from your phone, from anywhere
+- **Private** — STT and TTS run locally. Your voice never leaves your machine.
+
+## Quick Start
+
+```bash
+# Install
+git clone https://github.com/the747group-ctrl/vii.git ~/.vii
+cd ~/.vii
+python3 -m venv venv
+./venv/bin/pip install PyQt6 sounddevice soundfile numpy httpx kokoro-onnx faster-whisper fastapi uvicorn pynput Pillow sqlalchemy
+
+# Run
+./venv/bin/python3 desktop.py
+```
+
+Or use the installer:
+```bash
+bash install.sh
+```
+
+## How It Works
+
+1. Click the floating orb (or enable hands-free mode)
+2. Speak — Whisper transcribes your voice locally
+3. Claude thinks — streaming response, first words in under 2 seconds
+4. VII acts — opens apps, searches the web, types text, or just responds
+5. Kokoro speaks — response played through your speakers
+
+## What Can VII Do?
+
+| Say This | VII Does This |
+|----------|--------------|
+| "Open Safari" | Opens Safari |
+| "Search for voice AI startups" | Opens browser with search results |
+| "Take a screenshot" | Captures your screen |
+| "Turn the volume to 50" | Adjusts system volume |
+| "What's on my screen?" | Analyzes your display and describes it |
+| "Remember, I have a meeting at 3" | Saves to conversation memory |
+| "What did I say about the meeting?" | Recalls from memory |
+
+## Settings
+
+Right-click the orb → **Preferences** to configure:
+- LLM provider (Claude, Ollama local, OpenAI, Groq, OpenRouter)
+- TTS voice and speed
+- Audio input/output device
+- Mic gain
+- Hands-free mode / VAD sensitivity
+- Skin appearance
+
+## Remote Access
+
+Start the remote server to control your Mac from your phone:
+```bash
+./venv/bin/python3 remote_server.py
+```
+
+Or launch everything at once:
+```bash
+./start.sh
+```
+
+This starts the desktop orb + remote server + Cloudflare tunnel. Access your Mac from anywhere in the world.
 
 ## Architecture
 
 ```
-                    +------------------+
-                    |   User (Voice)   |
-                    +--------+---------+
-                             |
-                    +--------v---------+
-                    | Rust STT Binary  |  <-- Whisper.cpp, ~144ms
-                    | (hotkey capture)  |
-                    +--------+---------+
-                             |
-                    +--------v---------+
-                    | Pipeline Engine   |  <-- Pipecat-inspired streaming
-                    | (Python/asyncio)  |
-                    +--------+---------+
-                             |
-              +--------------+--------------+
-              |                             |
-     +--------v---------+         +--------v---------+
-     | Claude API        |         | Agent Router     |
-     | (streaming)       |         | (Bob/Falcon/etc) |
-     +--------+---------+         +------------------+
-              |
-     +--------v---------+
-     | TTS Daemon        |  <-- Kokoro, sentence-by-sentence
-     | (streaming audio) |
-     +--------+---------+
-              |
-     +--------v---------+
-     | Swift Overlay     |  <-- Animated avatars, glow, bubbles
-     +------------------+
-
-     +------------------+
-     | Telegram Remote   |  <-- Screen share, click, type from phone
-     | (FastAPI + Bot)   |
-     +------------------+
+Voice → Whisper STT (local) → Claude API (streaming) → Action Execution
+                                                      → Kokoro TTS (local) → Speaker
 ```
 
-## Project Structure
+- **STT:** faster-whisper (local, ~1s transcription)
+- **LLM:** Claude Sonnet 4 (streaming) or Ollama (local)
+- **TTS:** Kokoro-82M (local, multiple voices)
+- **UI:** PyQt6 floating orb with state-driven glow
+- **PC Control:** AppleScript bridge via mac-control.sh
+- **Vision:** Claude vision API with screenshot capture
+- **Storage:** SQLite for conversation persistence
+- **Remote:** FastAPI + Cloudflare Tunnel
 
-```
-vii-two/
-  core/                  # Voice pipeline engine
-    pipeline/            # Pipecat-inspired streaming orchestrator
-    audio/               # Audio I/O, playback, time stretching
-    echo/                # NLMS echo cancellation
-  overlay/               # Visual layer
-    swift/               # WhisperOverlay.app source (upgraded)
-    skins/               # Agent avatar packs (skin.json + WebM)
-  remote/                # Phone access
-    telegram/            # Telegram bot + remote control
-    web-ui/              # Local web UI for preferences
-    screen-capture/      # Screenshot + WebP encoding
-  rust-stt/              # Rust STT binary (from VII Zero, upgraded)
-  scripts/               # TTS daemon, utilities
-  config/                # Settings, avatars, dictionary
-  models/ -> symlink     # Whisper + Kokoro models (shared with VII Zero)
-  docs/                  # Architecture, specs, API docs
-```
+## Requirements
 
-## Rollback
+- macOS 14+
+- Python 3.11+
+- Anthropic API key (or Ollama for free local LLM)
+- Microphone
 
-VII Zero is preserved at `~/.openclaw/workspace/projects/local-whisper/` (git tag: `vii-zero`). The deployed binary at `/Applications/Whisper Dictation.app/` is untouched.
+## License
 
-## Tech Stack
-
-- **STT:** Whisper.cpp via Rust (native ARM64, 144ms)
-- **LLM:** Claude API (streaming)
-- **TTS:** Kokoro-82M (local, 0.35x RTF)
-- **Pipeline:** Python asyncio (Pipecat-inspired)
-- **Overlay:** Swift/AppKit (macOS native)
-- **Remote:** FastAPI + python-telegram-bot
-- **Echo:** NLMS adaptive filter (numpy vectorized)
-
-## Inspiration & Open Source References
-
-- **DecisionsAI** — Open source voice desktop assistant (Pipecat pipeline, Telegram integration)
-- **Keith Schacht's Task Master** — Voice-first UX patterns (LiveKit, real-time updates)
-- **VII Zero** — Our own foundation (`~/.openclaw/workspace/projects/local-whisper/`)
+Built on open source foundations. Inspired by the voice AI community.
 
 ---
 
-*Developed by The 747 Lab*
+*VII — Just speak.*
+*The 747 Lab*
