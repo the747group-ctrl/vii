@@ -495,16 +495,34 @@ class OrbWidget(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.drawEllipse(QPoint(cx, cy), int(r * 2.2), int(r * 2.2))
 
-        # Body
-        body = QRadialGradient(cx - r * 0.15, cy - r * 0.15, r * 1.1)
-        body.setColorAt(0, QColor(28, 28, 42))
-        body.setColorAt(0.7, QColor(15, 15, 24))
-        body.setColorAt(1, QColor(8, 8, 14))
-        p.setBrush(body)
-        rc = QColor(color)
-        rc.setAlphaF(min(0.25 + ga * 1.5, 1.0))
-        p.setPen(QPen(rc, 1.5))
-        p.drawEllipse(QPoint(cx, cy), r, r)
+        # Body — Claude-inspired warm gradient
+        icon_path = os.path.join(PROJECT_ROOT, "assets", f"vii-icon-{max(64, self.orb_size)}.png")
+        if os.path.exists(icon_path) and not hasattr(self, '_icon_pixmap'):
+            from PyQt6.QtGui import QPixmap as QP
+            self._icon_pixmap = QP(icon_path)
+
+        if hasattr(self, '_icon_pixmap') and not self._icon_pixmap.isNull():
+            # Draw the VII icon as the orb
+            scaled = self._icon_pixmap.scaled(r*2, r*2, Qt.AspectRatioMode.KeepAspectRatio,
+                                               Qt.TransformationMode.SmoothTransformation)
+            p.drawPixmap(cx - r, cy - r, scaled)
+            # Ring overlay
+            rc = QColor(color)
+            rc.setAlphaF(min(0.2 + ga, 1.0))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(rc, 1.5))
+            p.drawEllipse(QPoint(cx, cy), r, r)
+        else:
+            # Fallback — dark orb
+            body = QRadialGradient(cx - r * 0.15, cy - r * 0.15, r * 1.1)
+            body.setColorAt(0, QColor(28, 28, 42))
+            body.setColorAt(0.7, QColor(15, 15, 24))
+            body.setColorAt(1, QColor(8, 8, 14))
+            p.setBrush(body)
+            rc = QColor(color)
+            rc.setAlphaF(min(0.25 + ga * 1.5, 1.0))
+            p.setPen(QPen(rc, 1.5))
+            p.drawEllipse(QPoint(cx, cy), r, r)
 
         # Waveform during recording
         if self.state == "listening" and self.audio_level > 0.01:
@@ -776,8 +794,12 @@ class VIIApp:
         QTimer.singleShot(100, self._load)
 
     def _setup_tray(self):
-        px = QPixmap(16, 16)
-        px.fill(QColor("#06b6d4"))
+        tray_path = os.path.join(PROJECT_ROOT, "assets", "vii-tray.png")
+        if os.path.exists(tray_path):
+            px = QPixmap(tray_path)
+        else:
+            px = QPixmap(16, 16)
+            px.fill(QColor("#c87850"))
         self.tray = QSystemTrayIcon(QIcon(px), self.app)
         m = QMenu()
         m.setStyleSheet("QMenu{background:#12121e;color:#bbb;border:1px solid #252535}QMenu::item{padding:6px 20px}QMenu::item:selected{background:#1e1e35;color:#fff}")
