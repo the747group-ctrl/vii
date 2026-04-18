@@ -495,54 +495,109 @@ class OrbWidget(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.drawEllipse(QPoint(cx, cy), int(r * 2.2), int(r * 2.2))
 
-        # Body — Claude-inspired warm gradient
-        icon_path = os.path.join(PROJECT_ROOT, "assets", f"vii-icon-{max(64, self.orb_size)}.png")
-        if os.path.exists(icon_path) and not hasattr(self, '_icon_pixmap'):
-            from PyQt6.QtGui import QPixmap as QP
-            self._icon_pixmap = QP(icon_path)
+        # ── Siri-inspired animated orb ──
+        t = self.glow_phase
 
-        if hasattr(self, '_icon_pixmap') and not self._icon_pixmap.isNull():
-            # Draw the VII icon as the orb
-            scaled = self._icon_pixmap.scaled(r*2, r*2, Qt.AspectRatioMode.KeepAspectRatio,
-                                               Qt.TransformationMode.SmoothTransformation)
-            p.drawPixmap(cx - r, cy - r, scaled)
-            # Ring overlay
-            rc = QColor(color)
-            rc.setAlphaF(min(0.2 + ga, 1.0))
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.setPen(QPen(rc, 1.5))
-            p.drawEllipse(QPoint(cx, cy), r, r)
+        # Multiple layered gradients that shift and breathe
+        # Layer 1: Deep base
+        base = QRadialGradient(cx + math.sin(t * 0.7) * 4, cy + math.cos(t * 0.5) * 4, r * 1.05)
+        if self.state == "listening":
+            base.setColorAt(0, QColor(220, 80, 80, 200))
+            base.setColorAt(0.6, QColor(180, 40, 60, 160))
+            base.setColorAt(1, QColor(100, 20, 40, 80))
+        elif self.state == "thinking":
+            base.setColorAt(0, QColor(120, 100, 220, 200))
+            base.setColorAt(0.6, QColor(80, 60, 180, 160))
+            base.setColorAt(1, QColor(40, 30, 120, 80))
+        elif self.state == "speaking":
+            base.setColorAt(0, QColor(40, 200, 180, 200))
+            base.setColorAt(0.6, QColor(20, 160, 140, 160))
+            base.setColorAt(1, QColor(10, 100, 90, 80))
         else:
-            # Fallback — dark orb
-            body = QRadialGradient(cx - r * 0.15, cy - r * 0.15, r * 1.1)
-            body.setColorAt(0, QColor(28, 28, 42))
-            body.setColorAt(0.7, QColor(15, 15, 24))
-            body.setColorAt(1, QColor(8, 8, 14))
-            p.setBrush(body)
-            rc = QColor(color)
-            rc.setAlphaF(min(0.25 + ga * 1.5, 1.0))
-            p.setPen(QPen(rc, 1.5))
-            p.drawEllipse(QPoint(cx, cy), r, r)
+            # Idle — subtle warm breathing
+            pulse = 0.7 + 0.3 * math.sin(t * 0.8)
+            base.setColorAt(0, QColor(int(60 * pulse), int(50 * pulse), int(80 * pulse), 200))
+            base.setColorAt(0.6, QColor(int(35 * pulse), int(30 * pulse), int(55 * pulse), 160))
+            base.setColorAt(1, QColor(15, 12, 25, 100))
 
-        # Waveform during recording
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(base)
+        p.drawEllipse(QPoint(cx, cy), r, r)
+
+        # Layer 2: Flowing highlight (moves around the orb like Siri)
+        highlight_angle = t * 1.2
+        hx = cx + math.cos(highlight_angle) * r * 0.3
+        hy = cy + math.sin(highlight_angle) * r * 0.3
+        highlight = QRadialGradient(hx, hy, r * 0.6)
+        if self.state == "listening":
+            highlight.setColorAt(0, QColor(255, 140, 120, 100))
+        elif self.state == "thinking":
+            highlight.setColorAt(0, QColor(160, 140, 255, 100))
+        elif self.state == "speaking":
+            highlight.setColorAt(0, QColor(100, 255, 220, 100))
+        else:
+            highlight.setColorAt(0, QColor(140, 120, 180, int(40 + 30 * math.sin(t))))
+        highlight.setColorAt(1, QColor(0, 0, 0, 0))
+        p.setBrush(highlight)
+        p.drawEllipse(QPoint(cx, cy), r, r)
+
+        # Layer 3: Second flowing highlight (opposite direction)
+        h2_angle = -t * 0.9 + 2.0
+        h2x = cx + math.cos(h2_angle) * r * 0.25
+        h2y = cy + math.sin(h2_angle) * r * 0.25
+        h2 = QRadialGradient(h2x, h2y, r * 0.5)
+        if self.state == "listening":
+            h2.setColorAt(0, QColor(255, 200, 100, 70))
+        elif self.state == "thinking":
+            h2.setColorAt(0, QColor(200, 100, 255, 70))
+        elif self.state == "speaking":
+            h2.setColorAt(0, QColor(100, 220, 255, 70))
+        else:
+            h2.setColorAt(0, QColor(100, 80, 160, int(25 + 20 * math.sin(t * 1.3))))
+        h2.setColorAt(1, QColor(0, 0, 0, 0))
+        p.setBrush(h2)
+        p.drawEllipse(QPoint(cx, cy), r, r)
+
+        # Edge ring — subtle border
+        ring_alpha = 0.15 + ga * 0.5
+        rc = QColor(color)
+        rc.setAlphaF(min(ring_alpha, 0.6))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(rc, 1.0))
+        p.drawEllipse(QPoint(cx, cy), r, r)
+
+        # ── State-specific effects ──
+
+        # Listening: audio-reactive ring expansion
         if self.state == "listening" and self.audio_level > 0.01:
-            wc = QColor(color)
-            wc.setAlphaF(0.4)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(wc)
-            p.drawEllipse(QPoint(cx, cy), int(r * 0.3 + r * 0.4 * self.audio_level),
-                          int(r * 0.3 + r * 0.4 * self.audio_level))
+            for ring in range(3):
+                ring_r = r + 4 + ring * 6 + self.audio_level * 15
+                ring_a = max(0, 0.3 - ring * 0.1) * self.audio_level * 3
+                rc2 = QColor(220, 100, 80, int(min(ring_a, 1.0) * 255))
+                p.setPen(QPen(rc2, 1.5))
+                p.setBrush(Qt.BrushStyle.NoPen)
+                p.drawEllipse(QPoint(cx, cy), int(ring_r), int(ring_r))
 
-        # Thinking dots
+        # Thinking: orbiting particles
         if self.state == "thinking":
-            for i in range(3):
-                angle = self.glow_phase * 3 + i * (2 * math.pi / 3)
-                dx, dy = int(math.cos(angle) * r * 0.35), int(math.sin(angle) * r * 0.35)
-                dc = QColor(color)
-                dc.setAlphaF(min(0.4 + 0.4 * math.sin(self.glow_phase * 2 + i), 1.0))
-                p.setBrush(dc)
+            for i in range(4):
+                angle = t * 2.5 + i * (math.pi / 2)
+                orbit_r = r + 6 + 3 * math.sin(t * 3 + i)
+                px2 = cx + math.cos(angle) * orbit_r
+                py2 = cy + math.sin(angle) * orbit_r
+                dot_a = 0.5 + 0.5 * math.sin(t * 2 + i * 1.5)
+                dc = QColor(160, 140, 255, int(dot_a * 200))
                 p.setPen(Qt.PenStyle.NoPen)
-                p.drawEllipse(QPoint(cx + dx, cy + dy), 3, 3)
+                p.setBrush(dc)
+                p.drawEllipse(QPoint(int(px2), int(py2)), 3, 3)
+
+        # Speaking: pulsing outer ring
+        if self.state == "speaking":
+            pulse_r = r + 4 + 6 * math.sin(t * 4)
+            sc = QColor(40, 200, 180, int(80 + 40 * math.sin(t * 3)))
+            p.setPen(QPen(sc, 1.5))
+            p.setBrush(Qt.BrushStyle.NoPen)
+            p.drawEllipse(QPoint(cx, cy), int(pulse_r), int(pulse_r))
 
         # Status
         p.setPen(QColor(100, 100, 120))
