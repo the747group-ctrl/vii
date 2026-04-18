@@ -948,6 +948,7 @@ class OrbWidget(QWidget):
                 act.triggered.connect(lambda checked, i=cid: self._switch_conversation(i))
 
         menu.addAction("Type Command...").triggered.connect(self._type_command)
+        menu.addAction("Copy Last Response").triggered.connect(self._copy_last_response)
 
         menu.addSeparator()
 
@@ -1030,6 +1031,21 @@ class OrbWidget(QWidget):
             self.orb_size = self.skin.size
             self.setFixedSize(self.orb_size + 48, self.orb_size + 50)
             self.set_status(f"Skin: {self.skin.name}")
+
+    def _copy_last_response(self):
+        """Copy the last VII response to clipboard."""
+        from core.db import get_messages, get_latest_conversation
+        cid = get_latest_conversation()
+        if cid:
+            msgs = get_messages(cid, limit=2)
+            for m in reversed(msgs):
+                if m["role"] == "assistant":
+                    subprocess.run(["pbcopy"], input=m["content"].encode(),
+                                   capture_output=True, timeout=2)
+                    self.set_status("Copied")
+                    self._play_sound("done")
+                    return
+        self.set_status("Nothing to copy")
 
     def _type_command(self):
         """Open text input dialog to type a command instead of speaking."""
@@ -1273,7 +1289,13 @@ class VIIApp:
         self.tray.show()
 
     def _load(self):
-        threading.Thread(target=lambda: (self.worker.load_models(), self.worker.start(), self.orb.set_models_ready()), daemon=True).start()
+        def _bg():
+            t = time.time()
+            self.worker.load_models()
+            self.worker.start()
+            self.orb.set_models_ready()
+            print(f"  Models loaded in {time.time()-t:.1f}s")
+        threading.Thread(target=_bg, daemon=True).start()
 
     def _setup_global_hotkey(self):
         """Global hotkey: double-tap Right Command to toggle recording.

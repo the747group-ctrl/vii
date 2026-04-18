@@ -131,15 +131,24 @@ class ChatBubble(QWidget):
         y = y_offset + pad
         if self._transcript:
             p.setFont(font_small)
-            p.setPen(QColor(120, 120, 140))
+            p.setPen(QColor(90, 90, 110))
+            p.drawText(QRect(10 + pad, y, w - pad * 2, 16),
+                       Qt.AlignmentFlag.AlignLeft, "YOU")
+            y += 16
+            p.setPen(QColor(150, 150, 170))
             p.drawText(QRect(10 + pad, y, w - pad * 2, 18),
-                       Qt.AlignmentFlag.AlignLeft, f'You: "{self._transcript[:60]}"')
+                       Qt.AlignmentFlag.AlignLeft, self._transcript[:70])
             y += 22
 
         # Response (what VII said)
         if self._response:
+            p.setFont(font_small)
+            p.setPen(QColor(180, 130, 90))
+            p.drawText(QRect(10 + pad, y, w - pad * 2, 16),
+                       Qt.AlignmentFlag.AlignLeft, "VII")
+            y += 16
             p.setFont(font_body)
-            p.setPen(QColor(200, 200, 210))
+            p.setPen(QColor(210, 210, 220))
             lines = self._wrap_text(p, self._response, font_body, w - pad * 2)
             for line in lines[:6]:
                 p.drawText(QRect(10 + pad, y, w - pad * 2, 18),
