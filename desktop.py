@@ -250,8 +250,7 @@ class AIWorker(QThread):
             from core.reminders import reminders
             delay = reminders.parse_delay(text)
             if delay:
-                # Extract the reminder message
-                import re
+                # Extract the reminder message (re already imported at module level)
                 msg_match = re.search(r'(?:remind me|timer|reminder)\s+(?:in\s+\d+\s+\w+\s+)?(?:to\s+)?(.+)', lower)
                 msg = msg_match.group(1).strip() if msg_match else text
                 reminders.add(msg, delay)
