@@ -81,7 +81,9 @@ SYSTEM_PROMPT = (
     "  [ACTION: mute] or [ACTION: unmute]\n"
     "  [ACTION: quit-app AppName]\n"
     "  [ACTION: focus AppName]\n"
-    "  [ACTION: notify Title Message]\n\n"
+    "  [ACTION: notify Title Message]\n"
+    "  [ACTION: scroll up] or [ACTION: scroll down]\n"
+    "  [ACTION: dark-mode on] or [ACTION: dark-mode off]\n\n"
     "After actions, confirm briefly (1 sentence).\n"
     "For conversations, respond in 2-3 natural sentences. No markdown ever.\n"
     "Be warm, direct, genuinely helpful."
@@ -187,7 +189,8 @@ class AIWorker(QThread):
         t_start = time.time()
         segments, _ = self._whisper.transcribe(
             audio_data, language="en", beam_size=3,
-            no_speech_threshold=0.5,  # Higher threshold = fewer hallucinations
+            no_speech_threshold=0.5,
+            initial_prompt="VII, open Safari, search for, take a screenshot, what's on my screen, Bob, Falcon, hello world",
         )
         text = " ".join(s.text.strip() for s in segments).strip()
         stt_ms = (time.time() - t_start) * 1000
@@ -439,9 +442,18 @@ class OrbWidget(QWidget):
         self._top_timer.timeout.connect(lambda: self.raise_())
         self._top_timer.start(5000)
 
-        # Position bottom-right
+        # Position — restore saved or default bottom-right
+        self._pos_file = os.path.join(CONFIG_DIR, "orb-position.json")
         screen = QApplication.primaryScreen().availableGeometry()
-        self.move(screen.width() - self.width() - 20, screen.height() - self.height() - 40)
+        if os.path.exists(self._pos_file):
+            try:
+                with open(self._pos_file) as f:
+                    pos = json.load(f)
+                    self.move(pos["x"], pos["y"])
+            except Exception:
+                self.move(screen.width() - self.width() - 20, screen.height() - self.height() - 40)
+        else:
+            self.move(screen.width() - self.width() - 20, screen.height() - self.height() - 40)
 
     def _tick(self):
         self.glow_phase += 0.05
@@ -639,8 +651,41 @@ class OrbWidget(QWidget):
                 self._stop_recording()
             else:
                 self._start_recording()
+        elif self._drag_moved:
+            # Save position after drag
+            self._save_position()
         self._drag_start = None
         self._drag_moved = False
+
+    def mouseDoubleClickEvent(self, e):
+        """Double-click: trigger screen analysis."""
+        if not self._models_ready:
+            return
+        self.set_state("thinking")
+        self.set_status("Analyzing screen...")
+        # Submit a tiny audio that will be transcribed as nothing,
+        # but we'll handle this via a direct text submission
+        # For now, emit a vision-trigger phrase
+        from kokoro_onnx import Kokoro
+        k = self._get_kokoro_ref()
+        if k:
+            audio, _ = k.create("What is on my screen right now", voice="am_onyx", speed=1.5, lang="en-us")
+            self.recording_stopped.emit(audio)
+
+    def _get_kokoro_ref(self):
+        """Get kokoro from worker if available."""
+        try:
+            return self.parent()._worker._kokoro if hasattr(self, 'parent') else None
+        except:
+            return None
+
+    def _save_position(self):
+        try:
+            os.makedirs(os.path.dirname(self._pos_file), exist_ok=True)
+            with open(self._pos_file, "w") as f:
+                json.dump({"x": self.x(), "y": self.y()}, f)
+        except Exception:
+            pass
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
@@ -848,6 +893,9 @@ class VIIApp:
 
         QTimer.singleShot(100, self._load)
 
+        # Global hotkey — Ctrl to toggle recording from anywhere
+        self._setup_global_hotkey()
+
     def _setup_tray(self):
         tray_path = os.path.join(PROJECT_ROOT, "assets", "vii-tray.png")
         if os.path.exists(tray_path):
@@ -868,6 +916,39 @@ class VIIApp:
 
     def _load(self):
         threading.Thread(target=lambda: (self.worker.load_models(), self.worker.start(), self.orb.set_models_ready()), daemon=True).start()
+
+    def _setup_global_hotkey(self):
+        """Global Ctrl key to toggle recording from anywhere."""
+        def _hotkey_thread():
+            try:
+                from pynput import keyboard
+                ctrl_pressed = [False]
+                ctrl_time = [0.0]
+
+                def on_press(key):
+                    if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
+                        if not ctrl_pressed[0]:
+                            ctrl_pressed[0] = True
+                            ctrl_time[0] = time.time()
+
+                def on_release(key):
+                    if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
+                        if ctrl_pressed[0]:
+                            ctrl_pressed[0] = False
+                            # Only trigger if it was a quick tap (not held for shortcut)
+                            if time.time() - ctrl_time[0] < 0.4:
+                                if self.orb._models_ready:
+                                    if self.orb._recording:
+                                        self.orb._stop_recording()
+                                    elif self.orb.state in ("idle",):
+                                        self.orb._start_recording()
+
+                with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
+                    listener.join()
+            except Exception as e:
+                print(f"  [hotkey] Global hotkey unavailable: {e}")
+
+        threading.Thread(target=_hotkey_thread, daemon=True).start()
 
     def _on_status(self, text):
         if text == "Ready":
