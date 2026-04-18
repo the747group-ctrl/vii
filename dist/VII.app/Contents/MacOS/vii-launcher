@@ -1,0 +1,10 @@
+#!/bin/bash
+DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
+cd "$DIR"
+if [ -d "tts-venv" ]; then
+    exec ./tts-venv/bin/python3 desktop.py
+elif [ -d "venv" ]; then
+    exec ./venv/bin/python3 desktop.py
+else
+    exec python3 desktop.py
+fi

@@ -972,7 +972,21 @@ class VIIApp:
 
 
 if __name__ == "__main__":
-    if not API_KEY:
-        print("ERROR: No Anthropic API key. Set via Preferences or ANTHROPIC_API_KEY env var.")
+    # First-run onboarding
+    from onboarding import needs_onboarding, OnboardingDialog
+    if needs_onboarding() and not API_KEY:
+        _app = QApplication(sys.argv)
+        dialog = OnboardingDialog()
+        if dialog.exec() == 0:  # Rejected/skipped without config
+            if not load_api_key():
+                print("  No API key configured. Use Preferences to set one, or use Ollama.")
+                print("  Run: ./tts-venv/bin/python3 desktop.py")
+                sys.exit(1)
+        API_KEY = load_api_key()
+        del _app
+
+    if not API_KEY and load_setting("llm_provider") != "ollama":
+        print("ERROR: No API key. Run VII to set up, or set ANTHROPIC_API_KEY.")
         sys.exit(1)
+
     VIIApp().run()
