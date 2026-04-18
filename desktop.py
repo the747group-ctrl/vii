@@ -684,6 +684,12 @@ class OrbWidget(QWidget):
     # ── Paint ──
 
     def paintEvent(self, event):
+        try:
+            self._do_paint(event)
+        except Exception:
+            pass  # Never crash on paint
+
+    def _do_paint(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 

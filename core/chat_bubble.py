@@ -88,6 +88,12 @@ class ChatBubble(QWidget):
             self.update()
 
     def paintEvent(self, event):
+        try:
+            self._do_paint(event)
+        except Exception:
+            pass
+
+    def _do_paint(self, event):
         if not self._transcript and not self._response:
             return
 
