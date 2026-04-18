@@ -451,6 +451,18 @@ class AIWorker(QThread):
         else:
             # Claude streaming + overlapped TTS
             api_key = API_KEY
+            if not api_key:
+                # No API key — try Ollama as fallback
+                try:
+                    import httpx as hx
+                    hx.get(f"{ollama_url}/api/tags", timeout=2)
+                    llm_provider = "ollama"
+                    llm_model = "llama3.2:1b"
+                    self.status_changed.emit("Using Ollama (no API key)")
+                except Exception:
+                    self.error_occurred.emit("No API key and Ollama not running")
+                    self.status_changed.emit("Ready")
+                    return
             sentence_buffer = ""
             first_audio = False
 
@@ -936,6 +948,27 @@ class OrbWidget(QWidget):
                 act.triggered.connect(lambda checked, i=cid: self._switch_conversation(i))
 
         menu.addAction("Type Command...").triggered.connect(self._type_command)
+
+        menu.addSeparator()
+
+        # Help
+        help_menu = menu.addMenu("What can I say?")
+        help_menu.setStyleSheet(menu.styleSheet())
+        examples = [
+            "Open Safari",
+            "Search for flights to Tokyo",
+            "What's on my screen?",
+            "Take a screenshot",
+            "Turn the volume to 50",
+            "Remind me in 5 minutes to call",
+            "What time is it?",
+            "What's on my clipboard?",
+            "Set dark mode on",
+        ]
+        for ex in examples:
+            act = help_menu.addAction(f'"{ex}"')
+            act.setEnabled(False)
+
         menu.addAction("Double-tap Right Cmd — Record")
 
         menu.addSeparator()
@@ -1052,6 +1085,14 @@ class OrbWidget(QWidget):
         if self._recording or self.state in ("thinking", "speaking"):
             return
         import sounddevice as sd
+        try:
+            # Test mic access first
+            sd.query_devices(kind='input')
+        except Exception:
+            self._play_sound("error")
+            self.set_status("No mic access")
+            return
+
         self._play_sound("start")
         self._recording = True
         self._audio_chunks = []
