@@ -930,7 +930,7 @@ class OrbWidget(QWidget):
                 act.triggered.connect(lambda checked, i=cid: self._switch_conversation(i))
 
         menu.addAction("Type Command...").triggered.connect(self._type_command)
-        menu.addAction("Option/Alt — Toggle Recording")
+        menu.addAction("Double-tap Right Cmd — Record")
 
         menu.addSeparator()
         skin_menu = menu.addMenu("Skin")
@@ -1229,30 +1229,32 @@ class VIIApp:
         threading.Thread(target=lambda: (self.worker.load_models(), self.worker.start(), self.orb.set_models_ready()), daemon=True).start()
 
     def _setup_global_hotkey(self):
-        """Global Ctrl key to toggle recording from anywhere."""
+        """Global hotkey: double-tap Right Command to toggle recording.
+        Won't interfere with typing or existing shortcuts."""
         def _hotkey_thread():
             try:
                 from pynput import keyboard
-                ctrl_pressed = [False]
-                ctrl_time = [0.0]
+                last_tap = [0.0]
+                other_keys = [False]  # Track if other keys pressed between taps
 
                 def on_press(key):
-                    # Option/Alt key — doesn't conflict with VII Zero's Ctrl
-                    if key == keyboard.Key.alt_l or key == keyboard.Key.alt_r:
-                        if not ctrl_pressed[0]:
-                            ctrl_pressed[0] = True
-                            ctrl_time[0] = time.time()
+                    if key == keyboard.Key.cmd_r:
+                        pass  # Only care about release
+                    else:
+                        other_keys[0] = True  # Another key was pressed
 
                 def on_release(key):
-                    if key == keyboard.Key.alt_l or key == keyboard.Key.alt_r:
-                        if ctrl_pressed[0]:
-                            ctrl_pressed[0] = False
-                            # Only trigger if it was a quick tap (not held for shortcut)
-                            if time.time() - ctrl_time[0] < 0.4:
-                                # Emit signal — runs on main thread (thread-safe)
-                                self.orb.hotkey_toggle.emit()
+                    if key == keyboard.Key.cmd_r:
+                        now = time.time()
+                        # Double-tap: two taps within 400ms, no other keys between
+                        if not other_keys[0] and (now - last_tap[0]) < 0.4:
+                            self.orb.hotkey_toggle.emit()
+                            last_tap[0] = 0.0  # Reset to prevent triple-tap
+                        else:
+                            last_tap[0] = now
+                            other_keys[0] = False
 
-                with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
+                with keyboard.Listener(on_press=on_press, on_release=on_release, suppress=False) as listener:
                     listener.join()
             except Exception as e:
                 print(f"  [hotkey] Global hotkey unavailable: {e}")
@@ -1312,7 +1314,7 @@ class VIIApp:
         print()
         print("  Controls:")
         print("    Click orb    — Start/stop recording")
-        print("    Option tap   — Toggle recording (global)")
+        print("    Double-tap Right Cmd — Toggle recording (global)")
         print("    Right-click  — Menu (hands-free, dictation, settings)")
         print("    Double-click — Analyze screen")
         print("    Drag         — Reposition orb")
