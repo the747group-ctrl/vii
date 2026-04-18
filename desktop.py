@@ -680,6 +680,11 @@ class OrbWidget(QWidget):
 
     def set_models_ready(self):
         self._models_ready = True
+        # Restore saved mode states
+        self.hands_free = load_setting("hands_free", False)
+        self._dictation_mode = load_setting("dictation_mode", False)
+        if self.hands_free:
+            self._start_hands_free()
         self.state = "idle"
         self.status_text = "Tap to speak"
         self.update()
@@ -1023,6 +1028,8 @@ class OrbWidget(QWidget):
 
     def _toggle_dictation(self):
         self._dictation_mode = not self._dictation_mode
+        # Save state
+        self._save_mode("dictation_mode", self._dictation_mode)
         self.update()
 
     def _set_skin(self, sid):
@@ -1076,8 +1083,22 @@ class OrbWidget(QWidget):
                 self._wake_detector = None
             self.set_status("Tap to speak")
 
+    def _save_mode(self, key, value):
+        try:
+            s = {}
+            if os.path.exists(SETTINGS_PATH):
+                with open(SETTINGS_PATH) as f:
+                    s = json.load(f)
+            s[key] = value
+            os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
+            with open(SETTINGS_PATH, "w") as f:
+                json.dump(s, f, indent=2)
+        except Exception:
+            pass
+
     def _toggle_hands_free(self):
         self.hands_free = not self.hands_free
+        self._save_mode("hands_free", self.hands_free)
         if self.hands_free:
             self._start_hands_free()
         else:
