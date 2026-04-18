@@ -585,6 +585,7 @@ class AIWorker(QThread):
 
 class OrbWidget(QWidget):
     recording_stopped = pyqtSignal(object)
+    hotkey_toggle = pyqtSignal()  # thread-safe signal for global hotkey
 
     def __init__(self):
         super().__init__()
@@ -636,6 +637,9 @@ class OrbWidget(QWidget):
         self._top_timer.timeout.connect(lambda: self.raise_())
         self._top_timer.start(5000)
 
+        # Connect hotkey signal (thread-safe)
+        self.hotkey_toggle.connect(self._on_hotkey_toggle)
+
         # Position — restore saved or default bottom-right
         self._pos_file = os.path.join(CONFIG_DIR, "orb-position.json")
         screen = QApplication.primaryScreen().availableGeometry()
@@ -652,6 +656,15 @@ class OrbWidget(QWidget):
     def _tick(self):
         self.glow_phase += 0.05
         self.update()
+
+    def _on_hotkey_toggle(self):
+        """Handle global hotkey on main thread."""
+        if not self._models_ready:
+            return
+        if self._recording:
+            self._stop_recording()
+        elif self.state in ("idle",):
+            self._start_recording()
 
     def set_models_ready(self):
         self._models_ready = True
@@ -917,7 +930,7 @@ class OrbWidget(QWidget):
                 act.triggered.connect(lambda checked, i=cid: self._switch_conversation(i))
 
         menu.addAction("Type Command...").triggered.connect(self._type_command)
-        menu.addAction("Ctrl — Toggle Recording")
+        menu.addAction("Option/Alt — Toggle Recording")
 
         menu.addSeparator()
         skin_menu = menu.addMenu("Skin")
@@ -1030,6 +1043,8 @@ class OrbWidget(QWidget):
             subprocess.Popen(["afplay", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def _start_recording(self):
+        if self._recording or self.state in ("thinking", "speaking"):
+            return
         import sounddevice as sd
         self._play_sound("start")
         self._recording = True
@@ -1181,7 +1196,7 @@ class VIIApp:
                 from core.wakeword import WakeWordDetector
                 mic_gain = load_setting("mic_gain", 10.0)
                 self.orb._wake_detector = WakeWordDetector(self.worker._whisper, mic_gain)
-                self.orb._wake_detector.start(lambda: self.orb._start_recording())
+                self.orb._wake_detector.start(lambda: self.orb.hotkey_toggle.emit())
         self.orb._toggle_wake_word = _ww
 
         # Wire conversation switching
@@ -1222,22 +1237,20 @@ class VIIApp:
                 ctrl_time = [0.0]
 
                 def on_press(key):
-                    if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
+                    # Option/Alt key — doesn't conflict with VII Zero's Ctrl
+                    if key == keyboard.Key.alt_l or key == keyboard.Key.alt_r:
                         if not ctrl_pressed[0]:
                             ctrl_pressed[0] = True
                             ctrl_time[0] = time.time()
 
                 def on_release(key):
-                    if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
+                    if key == keyboard.Key.alt_l or key == keyboard.Key.alt_r:
                         if ctrl_pressed[0]:
                             ctrl_pressed[0] = False
                             # Only trigger if it was a quick tap (not held for shortcut)
                             if time.time() - ctrl_time[0] < 0.4:
-                                if self.orb._models_ready:
-                                    if self.orb._recording:
-                                        self.orb._stop_recording()
-                                    elif self.orb.state in ("idle",):
-                                        self.orb._start_recording()
+                                # Emit signal — runs on main thread (thread-safe)
+                                self.orb.hotkey_toggle.emit()
 
                 with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
                     listener.join()
@@ -1299,7 +1312,7 @@ class VIIApp:
         print()
         print("  Controls:")
         print("    Click orb    — Start/stop recording")
-        print("    Ctrl tap     — Toggle recording (global)")
+        print("    Option tap   — Toggle recording (global)")
         print("    Right-click  — Menu (hands-free, dictation, settings)")
         print("    Double-click — Analyze screen")
         print("    Drag         — Reposition orb")
