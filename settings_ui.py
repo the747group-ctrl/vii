@@ -114,9 +114,27 @@ async def ollama_models():
         import httpx
         resp = httpx.get(f"{settings['ollama_url']}/api/tags", timeout=5)
         models = [m["name"] for m in resp.json().get("models", [])]
-        return JSONResponse({"models": models, "ok": True})
+        return JSONResponse({"models": models, "ok": True, "status": "connected"})
     except Exception:
-        return JSONResponse({"models": [], "ok": False, "error": "Ollama not running"})
+        return JSONResponse({"models": [], "ok": False,
+                             "status": "not running",
+                             "help": "Install: brew install ollama && ollama serve && ollama pull llama3.2"})
+
+
+@app.get("/api/conversations")
+async def conversations():
+    from core.db import get_recent_conversations, get_messages
+    convos = get_recent_conversations(limit=20)
+    result = []
+    for c in convos:
+        msgs = get_messages(c["id"], limit=50)
+        result.append({
+            "id": c["id"],
+            "created": c["created_at"],
+            "title": c["title"],
+            "messages": msgs,
+        })
+    return JSONResponse({"conversations": result})
 
 
 @app.get("/api/tts-voices")

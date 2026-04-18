@@ -696,6 +696,7 @@ class OrbWidget(QWidget):
             "QMenu::separator{background:#252535;height:1px;margin:4px 8px}"
         )
 
+        # Mode indicators with shortcuts
         hf = menu.addAction("Hands-Free: ON" if self.hands_free else "Hands-Free: OFF")
         hf.triggered.connect(self._toggle_hands_free)
 
@@ -704,6 +705,7 @@ class OrbWidget(QWidget):
 
         menu.addSeparator()
         menu.addAction("New Chat").triggered.connect(self._new_chat)
+        menu.addAction("Tap Ctrl — Toggle Recording")
 
         menu.addSeparator()
         skin_menu = menu.addMenu("Skin")
@@ -761,8 +763,21 @@ class OrbWidget(QWidget):
 
     # ── Recording ──
 
+    def _play_sound(self, name):
+        """Play a subtle macOS system sound."""
+        sounds = {
+            "start": "/System/Library/Sounds/Tink.aiff",
+            "stop": "/System/Library/Sounds/Pop.aiff",
+            "error": "/System/Library/Sounds/Basso.aiff",
+            "done": "/System/Library/Sounds/Glass.aiff",
+        }
+        path = sounds.get(name)
+        if path and os.path.exists(path):
+            subprocess.Popen(["afplay", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     def _start_recording(self):
         import sounddevice as sd
+        self._play_sound("start")
         self._recording = True
         self._audio_chunks = []
         self.set_state("listening")
@@ -780,6 +795,7 @@ class OrbWidget(QWidget):
         self._audio_stream.start()
 
     def _stop_recording(self):
+        self._play_sound("stop")
         self._recording = False
         if self._audio_stream:
             self._audio_stream.stop()
@@ -878,7 +894,7 @@ class VIIApp:
         self.worker.audio_ready.connect(lambda s, r: None)
         self.worker.action_executed.connect(lambda c, r: print(f"  [ACTION] {c} → {r}"))
         self.worker.status_changed.connect(self._on_status)
-        self.worker.error_occurred.connect(lambda t: (print(f"  [ERROR] {t}"), self.orb.set_state("idle"), self.orb.set_status("Error")))
+        self.worker.error_occurred.connect(self._on_error)
         self.orb.recording_stopped.connect(self.worker.submit)
 
         # Wire orb menu to worker
@@ -949,6 +965,16 @@ class VIIApp:
                 print(f"  [hotkey] Global hotkey unavailable: {e}")
 
         threading.Thread(target=_hotkey_thread, daemon=True).start()
+
+    def _on_error(self, text):
+        print(f"  [ERROR] {text}")
+        self.orb._play_sound("error")
+        # Show brief error, auto-clear after 3s
+        short = text[:40] if len(text) > 40 else text
+        self.orb.set_state("idle")
+        self.orb.set_status(f"Error: {short}")
+        QTimer.singleShot(3000, lambda: self.orb.set_status(
+            "Hands-free" if self.orb.hands_free else "Tap to speak"))
 
     def _on_status(self, text):
         if text == "Ready":
