@@ -160,7 +160,12 @@ class AIWorker(QThread):
 
     def submit(self, audio_data):
         if self._models_ready and not self._speaking:
-            self._task_queue.put(audio_data)
+            self._task_queue.put(("audio", audio_data))
+
+    def submit_text(self, text):
+        """Submit text directly (skip STT)."""
+        if self._models_ready and not self._speaking:
+            self._task_queue.put(("text", text))
 
     def new_chat(self):
         self._conv_id = new_conversation("VII Session")
@@ -171,13 +176,23 @@ class AIWorker(QThread):
     def run(self):
         while True:
             try:
-                audio_data = self._task_queue.get(timeout=1)
+                task = self._task_queue.get(timeout=1)
             except queue.Empty:
                 continue
-            if audio_data is None:
+            if task is None:
                 break
+
+            # Handle both audio and text inputs
+            if isinstance(task, tuple) and len(task) == 2:
+                task_type, data = task
+            else:
+                task_type, data = "audio", task
+
             try:
-                self._process(audio_data)
+                if task_type == "text":
+                    self._process_text(data)
+                else:
+                    self._process(data)
             except Exception as e:
                 import traceback
                 traceback.print_exc()
@@ -207,6 +222,54 @@ class AIWorker(QThread):
         b64 = __import__('base64').b64encode(buf.getvalue()).decode()
         os.unlink(png)
         return b64
+
+    def _process_text(self, text):
+        """Process text input directly — skip STT."""
+        t_start = time.time()
+        stt_ms = 0
+        self.transcript_ready.emit(text)
+        lower = text.lower().strip()
+
+        # Quick responses
+        quick_responses = {
+            "what time": time.strftime("%I:%M %p"),
+            "what's the time": time.strftime("%I:%M %p"),
+            "what date": time.strftime("%A, %B %d, %Y"),
+            "who are you": "I'm VII, your voice AI assistant by The 747 Lab.",
+        }
+        for trigger, answer in quick_responses.items():
+            if trigger in lower:
+                self.response_ready.emit(answer)
+                self.status_changed.emit("Speaking...")
+                import sounddevice as sd
+                self._speak_text(answer, load_setting("tts_voice", "am_onyx"),
+                    load_setting("tts_speed", 1.0), sd)
+                self.status_changed.emit("Ready")
+                return
+
+        # Reminders
+        if "remind me" in lower:
+            from core.reminders import reminders
+            delay = reminders.parse_delay(text)
+            if delay:
+                msg_match = re.search(r'(?:remind me|timer|reminder)\s+(?:in\s+\d+\s+\w+\s+)?(?:to\s+)?(.+)', lower)
+                msg = msg_match.group(1).strip() if msg_match else text
+                reminders.add(msg, delay)
+                self.response_ready.emit(f"Reminder set: {msg}")
+                import sounddevice as sd
+                self._speak_text(f"Got it. I'll remind you in {delay // 60} minutes.",
+                    load_setting("tts_voice", "am_onyx"), load_setting("tts_speed", 1.0), sd)
+                self.status_changed.emit("Ready")
+                return
+
+        # Fall through to LLM — generate synthetic audio so _process handles it
+        self.status_changed.emit("Thinking...")
+        if self._kokoro:
+            audio, _ = self._kokoro.create(text, voice="am_onyx", speed=1.5, lang="en-us")
+            self._process(audio)
+        else:
+            self.error_occurred.emit("Models not loaded")
+            self.status_changed.emit("Ready")
 
     def _process(self, audio_data):
         import sounddevice as sd
@@ -245,6 +308,29 @@ class AIWorker(QThread):
             return
 
         self.transcript_ready.emit(text)
+
+        # ── Quick responses (no API call needed) ──
+        quick_responses = {
+            "what time": time.strftime("%I:%M %p"),
+            "what's the time": time.strftime("%I:%M %p"),
+            "what is the time": time.strftime("%I:%M %p"),
+            "what date": time.strftime("%A, %B %d, %Y"),
+            "what's the date": time.strftime("%A, %B %d, %Y"),
+            "what day": time.strftime("%A"),
+            "what's the day": time.strftime("%A"),
+            "who are you": "I'm VII, your voice AI assistant by The 747 Lab.",
+            "what can you do": "I can control your Mac, search the web, take screenshots, set reminders, read your clipboard, and have conversations. Just ask.",
+        }
+        for trigger, answer in quick_responses.items():
+            if trigger in lower:
+                self.response_ready.emit(answer)
+                self.status_changed.emit("Speaking...")
+                import sounddevice as sd
+                self._speak_text(answer,
+                    load_setting("tts_voice", "am_onyx"),
+                    load_setting("tts_speed", 1.0), sd)
+                self.status_changed.emit("Ready")
+                return
 
         # ── Reminders ──
         if "remind me" in lower or "set a timer" in lower or "set a reminder" in lower:
@@ -465,7 +551,14 @@ class AIWorker(QThread):
             except Exception as e:
                 self.action_executed.emit(cmd, f"error: {e}")
 
-        print(f"  [{stt_ms:.0f}ms stt | {llm_ms:.0f}ms llm | total: {(time.time()-t_start)*1000:.0f}ms]")
+        total_ms = (time.time()-t_start)*1000
+        print(f"  [{stt_ms:.0f}ms stt | {llm_ms:.0f}ms llm | total: {total_ms:.0f}ms]")
+
+        # Copy response to clipboard if it's useful (not just an action confirmation)
+        spoken = re.sub(r'\[ACTION:\s*.+?\]', '', response_text).strip()
+        if spoken and len(spoken) > 20 and not any(a in spoken.lower() for a in ["opened", "done", "typed"]):
+            subprocess.run(["pbcopy"], input=spoken.encode(), capture_output=True, timeout=2)
+
         self.status_changed.emit("Ready")
 
     def _speak_text(self, text, voice, speed, sd):
@@ -823,6 +916,7 @@ class OrbWidget(QWidget):
                 cid = c["id"]
                 act.triggered.connect(lambda checked, i=cid: self._switch_conversation(i))
 
+        menu.addAction("Type Command...").triggered.connect(self._type_command)
         menu.addAction("Ctrl — Toggle Recording")
 
         menu.addSeparator()
@@ -838,6 +932,19 @@ class OrbWidget(QWidget):
         menu.addSeparator()
         menu.addAction("Hide VII").triggered.connect(self.hide)
         menu.addAction("Restart").triggered.connect(self._restart)
+
+        # Version
+        ver = "2.0.0"
+        try:
+            vf = os.path.join(PROJECT_ROOT, "VERSION")
+            if os.path.exists(vf):
+                with open(vf) as f:
+                    ver = f.read().strip()
+        except:
+            pass
+        about = menu.addAction(f"VII v{ver} — The 747 Lab")
+        about.setEnabled(False)
+
         menu.addAction("Quit VII").triggered.connect(QApplication.quit)
         menu.exec(event.globalPos())
 
@@ -871,6 +978,19 @@ class OrbWidget(QWidget):
             self.orb_size = self.skin.size
             self.setFixedSize(self.orb_size + 48, self.orb_size + 50)
             self.set_status(f"Skin: {self.skin.name}")
+
+    def _type_command(self):
+        """Open text input dialog to type a command instead of speaking."""
+        from core.text_input import TextInputDialog
+        dialog = TextInputDialog()
+        text = dialog.get_text()
+        if text:
+            # Convert text to synthetic audio for the pipeline
+            # (simpler: directly process as text, skip STT)
+            self.set_state("thinking")
+            self.set_status("Processing...")
+            # We'll emit this as a signal — VIIApp wires it to worker
+            self._text_command = text
 
     def _switch_conversation(self, conv_id):
         """Switch to a different conversation."""
@@ -1031,7 +1151,17 @@ class VIIApp:
         self.worker.action_executed.connect(lambda c, r: print(f"  [ACTION] {c} → {r}"))
         self.worker.status_changed.connect(self._on_status)
         self.worker.error_occurred.connect(self._on_error)
-        self.orb.recording_stopped.connect(self.worker.submit)
+        self.orb.recording_stopped.connect(lambda audio: self.worker.submit(audio))
+
+        # Wire type command
+        orig_type_cmd = self.orb._type_command
+        def _tc():
+            orig_type_cmd()
+            text = getattr(self.orb, '_text_command', None)
+            if text:
+                self.worker.submit_text(text)
+                self.orb._text_command = None
+        self.orb._type_command = _tc
 
         # Wire orb menu to worker
         orig_new = self.orb._new_chat
