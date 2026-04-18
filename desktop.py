@@ -30,6 +30,7 @@ from PyQt6.QtGui import (QPainter, QColor, QRadialGradient, QPen, QFont,
 
 from core.skins import SkinManager
 from core.db import new_conversation, add_message, get_messages, get_latest_conversation
+from core.chat_bubble import ChatBubble
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
@@ -809,7 +810,20 @@ class OrbWidget(QWidget):
 
         menu.addSeparator()
         menu.addAction("New Chat").triggered.connect(self._new_chat)
-        menu.addAction("Tap Ctrl — Toggle Recording")
+
+        # Recent conversations
+        from core.db import get_recent_conversations
+        recent = get_recent_conversations(5)
+        if recent:
+            hist_menu = menu.addMenu("Recent Chats")
+            hist_menu.setStyleSheet(menu.styleSheet())
+            for c in recent:
+                label = c["title"] or f"Chat {c['id']}"
+                act = hist_menu.addAction(label)
+                cid = c["id"]
+                act.triggered.connect(lambda checked, i=cid: self._switch_conversation(i))
+
+        menu.addAction("Ctrl — Toggle Recording")
 
         menu.addSeparator()
         skin_menu = menu.addMenu("Skin")
@@ -857,6 +871,11 @@ class OrbWidget(QWidget):
             self.orb_size = self.skin.size
             self.setFixedSize(self.orb_size + 48, self.orb_size + 50)
             self.set_status(f"Skin: {self.skin.name}")
+
+    def _switch_conversation(self, conv_id):
+        """Switch to a different conversation."""
+        # This gets overridden by VIIApp
+        self.set_status(f"Chat {conv_id}")
 
     def _toggle_wake_word(self):
         self.wake_word_active = not self.wake_word_active
@@ -1001,11 +1020,13 @@ class VIIApp:
         self.orb = OrbWidget()
         self.orb.show()
 
+        self.bubble = ChatBubble()
+
         self._setup_tray()
 
         self.worker = AIWorker()
-        self.worker.transcript_ready.connect(lambda t: (self.orb.set_status("Heard: " + t[:30]), print(f"  You: \"{t}\"")))
-        self.worker.response_ready.connect(lambda t: (self.orb.set_state("speaking"), print(f"  VII: {t[:100]}")))
+        self.worker.transcript_ready.connect(self._on_transcript)
+        self.worker.response_ready.connect(self._on_response)
         self.worker.audio_ready.connect(lambda s, r: None)
         self.worker.action_executed.connect(lambda c, r: print(f"  [ACTION] {c} → {r}"))
         self.worker.status_changed.connect(self._on_status)
@@ -1032,6 +1053,9 @@ class VIIApp:
                 self.orb._wake_detector = WakeWordDetector(self.worker._whisper, mic_gain)
                 self.orb._wake_detector.start(lambda: self.orb._start_recording())
         self.orb._toggle_wake_word = _ww
+
+        # Wire conversation switching
+        self.orb._switch_conversation = lambda cid: setattr(self.worker, '_conv_id', cid) or self.orb.set_status(f"Chat {cid}")
 
         QTimer.singleShot(100, self._load)
 
@@ -1091,6 +1115,18 @@ class VIIApp:
                 print(f"  [hotkey] Global hotkey unavailable: {e}")
 
         threading.Thread(target=_hotkey_thread, daemon=True).start()
+
+    def _on_transcript(self, text):
+        self.orb.set_status("Heard: " + text[:30])
+        orb_center = QPoint(self.orb.x() + self.orb.width() // 2, self.orb.y())
+        self.bubble.show_transcript(text, orb_center)
+        print(f"  You: \"{text}\"")
+
+    def _on_response(self, text):
+        self.orb.set_state("speaking")
+        orb_center = QPoint(self.orb.x() + self.orb.width() // 2, self.orb.y())
+        self.bubble.show_response(text, orb_center)
+        print(f"  VII: {text[:100]}")
 
     def _on_error(self, text):
         print(f"  [ERROR] {text}")
