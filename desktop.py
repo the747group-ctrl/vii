@@ -180,8 +180,15 @@ class AIWorker(QThread):
             except Exception as e:
                 import traceback
                 traceback.print_exc()
-                self.error_occurred.emit(str(e))
+                self.error_occurred.emit(str(e)[:80])
+                self._speaking = False
                 self.status_changed.emit("Ready")
+                # Auto-recovery: ensure models still loaded
+                if self._whisper is None or self._kokoro is None:
+                    try:
+                        self.load_models()
+                    except:
+                        pass
 
     def _capture_screen_b64(self):
         import tempfile, base64
@@ -565,6 +572,7 @@ class OrbWidget(QWidget):
 
     def set_status(self, t):
         self.status_text = t
+        self.setToolTip(t)
         self.update()
 
     # ── Paint ──
@@ -1111,8 +1119,26 @@ class VIIApp:
         self.app.quit()
 
     def run(self):
-        print("\n  VII — The 747 Lab")
-        print("  Click orb to speak. Right-click for menu.\n")
+        ver = "2.0.0"
+        try:
+            vf = os.path.join(PROJECT_ROOT, "VERSION")
+            if os.path.exists(vf):
+                with open(vf) as f:
+                    ver = f.read().strip()
+        except:
+            pass
+
+        print()
+        print(f"  VII v{ver} — Voice Intelligence Interface")
+        print("  The 747 Lab")
+        print()
+        print("  Controls:")
+        print("    Click orb    — Start/stop recording")
+        print("    Ctrl tap     — Toggle recording (global)")
+        print("    Right-click  — Menu (hands-free, dictation, settings)")
+        print("    Double-click — Analyze screen")
+        print("    Drag         — Reposition orb")
+        print()
         sys.exit(self.app.exec())
 
 
