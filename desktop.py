@@ -87,7 +87,22 @@ SYSTEM_PROMPT = (
     "  [ACTION: focus AppName]\n"
     "  [ACTION: notify Title Message]\n"
     "  [ACTION: scroll up] or [ACTION: scroll down]\n"
-    "  [ACTION: dark-mode on] or [ACTION: dark-mode off]\n\n"
+    "  [ACTION: dark-mode on] or [ACTION: dark-mode off]\n"
+    "  [ACTION: clipboard-get] — read clipboard contents\n"
+    "  [ACTION: clipboard-set text here] — copy text to clipboard\n"
+    "  [ACTION: say message here] — speak a message aloud via macOS\n"
+    "  [ACTION: wifi] — get WiFi network name\n"
+    "  [ACTION: battery] — get battery percentage\n"
+    "  [ACTION: apps] — list running applications\n"
+    "  [ACTION: frontmost] — get the frontmost app name\n"
+    "  [ACTION: browser-url] — get current browser URL\n"
+    "  [ACTION: browser-title] — get current browser tab title\n\n"
+    "IMPORTANT RULES:\n"
+    "- You can chain multiple actions: [ACTION: open-app Safari] then [ACTION: open-url ...]\n"
+    "- For web searches, use: [ACTION: open-url https://google.com/search?q=query+here]\n"
+    "- When the user says 'remind me', use: [ACTION: notify VII Reminder: message]\n"
+    "- When asked about clipboard, read it with [ACTION: clipboard-get] and include the result\n"
+    "- Always confirm what you did in 1 spoken sentence after actions\n\n"
     "After actions, confirm briefly (1 sentence).\n"
     "For conversations, respond in 2-3 natural sentences. No markdown ever.\n"
     "Be warm, direct, genuinely helpful."
@@ -222,6 +237,25 @@ class AIWorker(QThread):
             return
 
         self.transcript_ready.emit(text)
+
+        # ── Reminders ──
+        if "remind me" in lower or "set a timer" in lower or "set a reminder" in lower:
+            from core.reminders import reminders
+            delay = reminders.parse_delay(text)
+            if delay:
+                # Extract the reminder message
+                import re
+                msg_match = re.search(r'(?:remind me|timer|reminder)\s+(?:in\s+\d+\s+\w+\s+)?(?:to\s+)?(.+)', lower)
+                msg = msg_match.group(1).strip() if msg_match else text
+                reminders.add(msg, delay)
+                mins = delay // 60
+                self.response_ready.emit(f"Reminder set for {mins} minutes: {msg}")
+                self._speak_text(f"Got it. I'll remind you in {mins} minutes.",
+                                 load_setting("tts_voice", "am_onyx"),
+                                 load_setting("tts_speed", 1.0),
+                                 __import__('sounddevice'))
+                self.status_changed.emit("Ready")
+                return
 
         # ── Dictation mode ──
         if self._dictation:
@@ -394,12 +428,28 @@ class AIWorker(QThread):
             cmd = parts[0]
             args = parts[1] if len(parts) > 1 else ""
             try:
-                result = subprocess.run(
-                    [MAC_CONTROL, cmd] + ([args] if args else []),
-                    capture_output=True, text=True, timeout=10,
-                )
-                out = result.stdout.strip()[:100] or "done"
-                self.action_executed.emit(cmd, out)
+                if cmd == "clipboard-get":
+                    # Read clipboard and inject into conversation context
+                    result = subprocess.run(
+                        ["pbpaste"], capture_output=True, text=True, timeout=5,
+                    )
+                    out = result.stdout.strip()[:200] or "(empty)"
+                    self.action_executed.emit(cmd, f"Clipboard: {out}")
+                    # Add clipboard content as context for the conversation
+                    add_message(self._conv_id, "assistant", f"[Clipboard content: {out}]")
+                elif cmd == "clipboard-set" and args:
+                    subprocess.run(
+                        ["pbcopy"], input=args.encode(), timeout=5,
+                    )
+                    out = f"Copied: {args[:60]}"
+                    self.action_executed.emit(cmd, out)
+                else:
+                    result = subprocess.run(
+                        [MAC_CONTROL, cmd] + ([args] if args else []),
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    out = result.stdout.strip()[:100] or "done"
+                    self.action_executed.emit(cmd, out)
                 # macOS notification for visible actions
                 if cmd in ("open-app", "open-url", "screenshot", "notify"):
                     subprocess.Popen(["osascript", "-e",
@@ -469,6 +519,8 @@ class OrbWidget(QWidget):
 
         # Hands-free
         self.hands_free = False
+        self.wake_word_active = False
+        self._wake_detector = None
         self._vad_speaking = False
         self._vad_silence_frames = 0
         self._vad_speech_frames = 0
@@ -745,6 +797,9 @@ class OrbWidget(QWidget):
         dt = menu.addAction("Dictation: ON" if self._dictation_mode else "Dictation: OFF")
         dt.triggered.connect(self._toggle_dictation)
 
+        ww = menu.addAction("Wake Word: ON" if self.wake_word_active else 'Wake Word: OFF ("Hey VII")')
+        ww.triggered.connect(self._toggle_wake_word)
+
         menu.addSeparator()
         menu.addAction("New Chat").triggered.connect(self._new_chat)
         menu.addAction("Tap Ctrl — Toggle Recording")
@@ -795,6 +850,17 @@ class OrbWidget(QWidget):
             self.orb_size = self.skin.size
             self.setFixedSize(self.orb_size + 48, self.orb_size + 50)
             self.set_status(f"Skin: {self.skin.name}")
+
+    def _toggle_wake_word(self):
+        self.wake_word_active = not self.wake_word_active
+        if self.wake_word_active:
+            self.set_status("Say 'Hey VII'")
+            # Wake word detector will be started by VIIApp which has whisper ref
+        else:
+            if self._wake_detector:
+                self._wake_detector.stop()
+                self._wake_detector = None
+            self.set_status("Tap to speak")
 
     def _toggle_hands_free(self):
         self.hands_free = not self.hands_free
@@ -948,6 +1014,17 @@ class VIIApp:
             orig_dict()
             self.worker.set_dictation_mode(self.orb._dictation_mode)
         self.orb._toggle_dictation = _d
+
+        # Wire wake word toggle
+        orig_ww = self.orb._toggle_wake_word
+        def _ww():
+            orig_ww()
+            if self.orb.wake_word_active and self.worker._whisper:
+                from core.wakeword import WakeWordDetector
+                mic_gain = load_setting("mic_gain", 10.0)
+                self.orb._wake_detector = WakeWordDetector(self.worker._whisper, mic_gain)
+                self.orb._wake_detector.start(lambda: self.orb._start_recording())
+        self.orb._toggle_wake_word = _ww
 
         QTimer.singleShot(100, self._load)
 
