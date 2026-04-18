@@ -68,8 +68,12 @@ def load_setting(key, default=None):
 
 API_KEY = load_api_key()
 
+import datetime
+_today = datetime.date.today().strftime("%A, %B %d, %Y")
+
 SYSTEM_PROMPT = (
-    "You are VII, a voice-controlled AI assistant by The 747 Lab.\n"
+    f"You are VII, a voice-controlled AI assistant by The 747 Lab.\n"
+    f"Today is {_today}.\n"
     "You can control the user's Mac, see their screen, AND have natural conversations.\n\n"
     "ACTIONS — when the user asks you to DO something:\n"
     "  [ACTION: open-app Safari]\n"
@@ -270,20 +274,52 @@ class AIWorker(QThread):
         response_text = ""
 
         if llm_provider == "ollama":
+            # Ollama streaming — overlapped TTS like Claude
+            sentence_buffer = ""
+            first_audio = False
+
             with httpx.Client(timeout=60.0) as client:
-                resp = client.post(
-                    f"{ollama_url}/api/chat",
+                with client.stream(
+                    "POST", f"{ollama_url}/api/chat",
                     json={
                         "model": llm_model or "llama3.2:1b",
                         "messages": [{"role": "system", "content": SYSTEM_PROMPT}] + messages,
-                        "stream": False,
+                        "stream": True,
                     },
-                )
-                resp.raise_for_status()
-                response_text = resp.json().get("message", {}).get("content", "")
+                ) as resp:
+                    resp.raise_for_status()
+                    for line in resp.iter_lines():
+                        if not line:
+                            continue
+                        try:
+                            chunk_data = json.loads(line)
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+                        chunk = chunk_data.get("message", {}).get("content", "")
+                        if chunk:
+                            response_text += chunk
+                            sentence_buffer += chunk
+                            # Extract sentences for overlapped TTS
+                            for i, ch in enumerate(sentence_buffer):
+                                if ch in '.!?' and i + 2 < len(sentence_buffer):
+                                    if sentence_buffer[i+1] == ' ' and sentence_buffer[i+2].isupper():
+                                        sentence = sentence_buffer[:i+1].strip()
+                                        sentence_buffer = sentence_buffer[i+1:].strip()
+                                        if sentence and len(sentence) > 5 and '[ACTION' not in sentence:
+                                            if not first_audio:
+                                                first_audio = True
+                                                self.response_ready.emit(sentence)
+                                                self.status_changed.emit("Speaking...")
+                                            self._speak_text(sentence, tts_voice, tts_speed, sd)
+                                        break
 
-            # TTS the full response (Ollama doesn't stream well enough for overlapping)
-            self._speak_text(response_text, tts_voice, tts_speed, sd)
+            # Speak remaining
+            remaining = sentence_buffer.strip()
+            if remaining and len(remaining) > 3 and '[ACTION' not in remaining:
+                if not first_audio:
+                    self.response_ready.emit(remaining)
+                    self.status_changed.emit("Speaking...")
+                self._speak_text(remaining, tts_voice, tts_speed, sd)
 
         else:
             # Claude streaming + overlapped TTS
@@ -362,7 +398,13 @@ class AIWorker(QThread):
                     [MAC_CONTROL, cmd] + ([args] if args else []),
                     capture_output=True, text=True, timeout=10,
                 )
-                self.action_executed.emit(cmd, result.stdout.strip()[:100] or "done")
+                out = result.stdout.strip()[:100] or "done"
+                self.action_executed.emit(cmd, out)
+                # macOS notification for visible actions
+                if cmd in ("open-app", "open-url", "screenshot", "notify"):
+                    subprocess.Popen(["osascript", "-e",
+                        f'display notification "{out}" with title "VII" sound name "Glass"'],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception as e:
                 self.action_executed.emit(cmd, f"error: {e}")
 
